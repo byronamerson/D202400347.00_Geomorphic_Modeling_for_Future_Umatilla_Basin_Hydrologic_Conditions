@@ -1,0 +1,35 @@
+git init
+```
+
+Create a `.gitignore`:
+```
+# Data files
+data/
+*.csv
+*.xlsx
+*.rds
+*.parquet
+
+data_in/
+*.csv
+*.xlsx
+*.rds
+*.parquet
+
+data_out/
+*.csv
+*.xlsx
+*.rds
+*.parquet
+
+# Plots and figures
+plots/
+*.png
+*.pdf
+*.jpg
+
+# R environment
+.Rproj.user/
+.Rhistory
+.RData
+.Rprofile

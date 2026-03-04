@@ -1,0 +1,501 @@
+---
+title: "Umatilla River Hydrology Pipeline — Working Notebook"
+author: "temperheic"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: '3'
+    df_print: paged
+  html_notebook:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+    theme: flatly
+subtitle: '01 → 01b → 01d → 01c → 02: Acquisition, Regulation Correction, Record Extension,
+  Stream Power'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  warning    = FALSE,
+  message    = TRUE,
+  fig.width  = 10,
+  fig.height = 6,
+  fig.retina = 2,
+  comment    = "#>"
+)
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(scales)
+
+# Base data directory — adjust if needed
+DATA_DIR <- "data/"
+```
+
+# Overview
+
+This notebook documents the hydrology pipeline for the Umatilla River
+discharge–channel migration analysis (DOGAMI O-25-10 follow-up). The pipeline
+runs through five scripts in sequence:
+
+| Script | Purpose | Key Output |
+|--------|---------|------------|
+| `01_hydrology_acquisition.R` | Pull USGS daily + peak flows for 3 gages | `peak_flows.csv`, `daily_flows.csv`, flood frequency |
+| `01b_mckay_creek_acquisition.R` | Pull McKay Creek data from USGS + USBR Hydromet | MCKO, MYKO, MCK daily records |
+| `01d_regulation_correction.R` | Reconstruct unregulated peaks at 14033500 | `reconstructed_peaks.csv` |
+| `01c_move3_extension_and_weighting.R` | MOVE.3 extend 14020850 using corrected index | `move3_extended_record.csv` |
+| `02_reach_attributes_and_scaling.R` | CMZ import, DA scaling, stream power | `reach_attributes.csv` |
+
+The sequencing is intentional: 01d must run before 01c because the MOVE.3
+extension of 14020850 uses the *corrected* 14033500 as its primary index gage.
+
+---
+
+# 1. Gage Network and Data Acquisition (01)
+
+## 1.1 Gage metadata
+
+Three USGS gages span the study area from the Blue Mountains headwaters to the
+Columbia Plateau:
+
+```{r gage-metadata, eval=TRUE}
+gage_metadata <- tribble(
+  ~gage_id,    ~gage_name,                                       ~position,      ~DA_sqmi, ~record,
+  "14020000",  "Umatilla R above Meacham Cr nr Gibbon",          "upstream",     131,      "1933–2024",
+  "14020850",  "Umatilla R at W Reservation Bndy nr Pendleton",  "mid",          682,      "1996–2025",
+  "14033500",  "Umatilla R near Umatilla",                       "downstream",   2290,     "1904–2024"
+)
+
+kable(gage_metadata, caption = "Umatilla River gage network")
+```
+
+Reach assignment follows the gage positions:
+
+- **RS 30–39** (upstream of Pendleton) → 14020000 (Gibbon, 131 mi²)
+- **RS 9–29** (Pendleton corridor) → 14020850 (Reservation Bndy, 682 mi²)
+- **RS 1–8** (lower river) → 14033500 (near Umatilla, 2290 mi²)
+
+## 1.2 Data retrieval
+
+`01_hydrology_acquisition.R` uses `dataRetrieval` to pull daily mean discharge,
+annual instantaneous peaks, and site metadata from USGS NWIS. Each retrieval
+function (`pull_daily_flow()`, `pull_peak_flow()`, `pull_site_info()`) is atomic
+— one gage, one data type — then mapped across gages with `purrr::map()` and
+`safely()` for fault tolerance.
+
+```{r peak-flows-load, eval=TRUE}
+# Load peak flows from the pipeline output
+peak_flows <- read_csv(file.path(DATA_DIR, "peak_flows.csv"),
+                       col_types = cols(.default = col_guess(),
+                                        gage_id = col_character()))
+```
+
+```{r peak-summary, eval=TRUE}
+peak_flows %>%
+  group_by(gage_id) %>%
+  summarize(
+    n_peaks    = n(),
+    first_year = min(water_year),
+    last_year  = max(water_year),
+    median_q   = median(peak_q_cfs, na.rm = TRUE),
+    max_q      = max(peak_q_cfs, na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  kable(caption = "Peak flow record summary", digits = 0,
+        format.args = list(big.mark = ","))
+```
+
+
+## 1.3 Initial flood frequency (L-moments)
+
+The initial flood frequency uses L-moment LP3 fitting — adequate for bankfull
+(Q2) estimation and preliminary stream power context. The full B17C analysis
+(EMA, regional skew, MGBT) runs through `peakfq` in the scripts that need it.
+
+```{r flood-freq-initial}
+# Hardcoded from pipeline run — L-moment LP3
+ff_initial <- tribble(
+  ~gage_id,    ~Q2,   ~Q5,    ~Q10,    ~Q25,    ~Q50,    ~Q100,
+  "14020000",  2119,  3361,   4212,    5247,    6054,    6880,
+  "14020850",  5644,  9451,  12399,   16470,   19776,   23331,
+  "14033500",  5293,  8747,  11332,   14822,   17612,   20547
+)
+
+ff_initial %>%
+  mutate(across(Q2:Q100, ~ comma(.x))) %>%
+  kable(caption = "Initial flood frequency estimates (L-moment LP3, cfs)")
+```
+
+**Key issue:** All 121 peaks at 14033500 carry NWIS qualification codes 5 or 6
+(regulation-affected) due to McKay Dam. The L-moment fit doesn't account for
+this. The EMA/B17C analysis with regional skew (SIR 2016-5083) gives slightly
+different numbers:
+
+```{r flood-freq-ema}
+# Hardcoded from peakfq::emafit() run
+ff_ema <- tribble(
+  ~gage_id,    ~Q2,   ~Q10,    ~Q100,  ~record_length, ~weighted_skew,
+  "14020000",  2119,   4212,    8010,   92,              0.389,
+  "14020850",  5542,  12199,   23909,   30,              0.120,
+  "14033500",  5223,  11144,   21899,  121,              0.245
+)
+
+ff_ema %>%
+  mutate(across(Q2:Q100, ~ comma(.x))) %>%
+  kable(caption = "B17C flood frequency estimates (EMA, weighted skew, cfs)")
+```
+
+Regional skew from SIR 2016-5083: G~r~ = −0.07, SE = 0.424.
+
+---
+
+# 2. McKay Creek Data Acquisition (01b)
+
+## 2.1 Why McKay Creek matters
+
+McKay Dam (USBR, completed 1927) regulates McKay Creek, a major tributary
+entering the Umatilla at RS 26. Pre-dam, McKay Creek peaked at 1,460–3,250
+cfs/yr with an average daily flow of ~160 cfs. Post-dam, peaks >1,500 cfs have
+occurred only 3 times since 1927. The dam has 65,534 AF active storage plus a
+~6,000 AF flood pool.
+
+This regulation suppresses peaks at 14033500 (downstream of the confluence),
+which means the entire 121-year record at that gage reflects an artificial flow
+regime. To characterize natural flood frequency for RS 1–8, we need to
+reconstruct what the peaks would have been without the dam.
+
+## 2.2 Data sources
+
+`01b_mckay_creek_acquisition.R` pulls from two sources:
+
+1. **USGS NWIS** — gage 14023500 (McKay Cr nr Pendleton): daily + peaks,
+   ~1918–1991. Includes 5 pre-dam peaks (WY 1919–1923) that represent natural
+   hydrology.
+
+2. **USBR Hydromet** — via `https://www.usbr.gov/pn-bin/daily.pl`:
+   - **MCKO**: McKay Cr below dam, daily Q (cfs), 1980–present
+   - **MYKO**: McKay Cr above reservoir (natural inflow), daily Q (cfs), 1980–present
+   - **MCK**: McKay Reservoir storage, daily (AF), 1980–present
+
+Cross-validation of MCKO vs USGS 14023500 during their 1980–1991 overlap showed
+r = 1.0 and mean difference = 0 cfs — MCKO is a seamless extension.
+
+## 2.3 The 2020 flood as proof of concept
+
+```{r mckay-2020, eval=FALSE}
+# This chunk is for reference — the actual data are in the 01b outputs
+# WY 2020 event: MYKO natural inflow peaked at 2,470 cfs
+#                MCKO dam release peaked at 373 cfs (one month later)
+#                Attenuation: 85%
+# This confirms McKay Dam is a powerful peak regulator.
+```
+
+The WY 2020 flood illustrates the problem: McKay Creek's natural inflow peak
+was 2,470 cfs (MYKO), but the dam released only 373 cfs (MCKO) — a peak one
+month later, at 85% attenuation. Any flood frequency analysis using the
+observed 14033500 record captures this attenuated signal, systematically
+underestimating the natural flood regime.
+
+---
+
+# 3. Regulation Correction (01d)
+
+## 3.1 Approach
+
+The regulation correction reconstructs what each annual peak at 14033500 would
+have been if McKay Dam didn't exist. The "regulation deficit" is defined as:
+
+$$\text{deficit} = Q_{\text{natural inflow (MYKO)}} - Q_{\text{dam release (MCKO)}}$$
+
+This deficit is added back to the observed Umatilla peak:
+
+$$Q_{\text{unregulated}} = Q_{\text{observed}} + \text{deficit}$$
+
+For the **truth period** (1980–present), MYKO data exist and the deficit is
+computed directly. For the **pre-MYKO post-dam period** (1927–1979), the
+natural inflow must be estimated. Two methods were tested:
+
+- **Method (i): Statistical scaling** — log-log regression of MYKO peak vs
+  Umatilla peak with optional seasonal harmonics and Duan's smearing correction.
+- **Method (ii): Daily mass balance** — back-calculate reservoir inflow from
+  storage changes and dam releases: Q~in~ = dS/dt + Q~out~.
+
+## 3.2 Event pairing
+
+For each of the 121 annual peaks at 14033500, a ±14-day window around the peak
+date is used to extract concurrent McKay Creek conditions (MYKO, MCKO, MCK
+storage). This is handled by `pair_peaks_with_mckay()`.
+
+## 3.3 Cross-validation
+
+Both methods were validated against the truth period (45 events with concurrent
+MYKO + MCKO data):
+
+```{r cv-performance}
+cv_perf <- tribble(
+  ~method,                ~level,    ~n,  ~rmse,  ~bias,    ~pct_bias, ~nse,    ~r_squared,
+  "statistical_scaling",  "deficit", 45,  630,    -18,      -2.6,       0.251,   0.374,
+  "mass_balance",         "deficit", 45,  367,    -148,    -17.3,       0.783,   0.837,
+  "statistical_scaling",  "inflow",  45,  451,     14,       2.6,       0.418,   0.520,
+  "mass_balance",         "inflow",  45,  274,    -120,    -13.5,       0.785,   0.856
+)
+
+cv_perf %>%
+  mutate(across(c(rmse, bias), ~ round(.x)),
+         across(c(pct_bias, nse, r_squared), ~ round(.x, 3))) %>%
+  kable(caption = "Cross-validation performance: regulation deficit and inflow estimation")
+```
+
+**Mass balance was decisively better:** NSE = 0.783 vs 0.251 at the deficit
+level. It has a −17% bias (daily storage smooths within-day peaks) but much
+lower variance than statistical scaling (R² = 0.837 vs 0.374). Mass balance was
+auto-selected for the reconstruction.
+
+For 1927–1979 peaks where MCK storage data are unavailable, the statistical
+model provides the fallback.
+
+## 3.4 Correction summary
+
+```{r correction-summary}
+correction_summary <- tribble(
+  ~period,              ~correction_source,    ~n_peaks, ~mean_obs, ~mean_unreg, ~mean_deficit, ~max_deficit, ~mean_pct,
+  "pre_dam",            "none_predam",         23,       4704,      4704,         0,             0,            0.0,
+  "post_dam_no_myko",   "statistical_scaling", 52,       5590,      6620,         1030,          3280,        13.8,
+  "post_dam_with_myko", "observed_myko",       45,       6780,      7880,         1100,          3340,        12.5
+)
+
+correction_summary %>%
+  mutate(across(mean_obs:max_deficit, ~ comma(.x))) %>%
+  kable(caption = "Correction summary by period")
+```
+
+Key findings:
+
+- **94 of 97 post-dam peaks** were corrected upward (deficit > 0)
+- Average regulation deficit: ~1,000–1,100 cfs (~13–14% of peak)
+- Maximum deficit: ~3,300 cfs for large events
+- WY 1993 had a negative deficit (irrigation release exceeded natural inflow)
+- Pre-dam peaks (1904–1926) are left unchanged
+
+---
+
+# 4. MOVE.3 Record Extension (01c)
+
+## 4.1 The problem
+
+USGS 14020850 (Pendleton) has only a 30-year record (1996–2025). The 2020 flood
+(largest on record by a wide margin) sits in this short sample, inflating the
+upper tail of the frequency curve. MOVE.3 (Bulletin 17C Appendix 8) extends the
+record using longer-record index gages, stabilizing the frequency estimates.
+
+## 4.2 Why use the corrected 14033500?
+
+The original 01c used the **regulated** 14033500 record as one index gage. The
+regulation signal from McKay Dam adds noise to the log-space correlation with
+14020850 — the index gage's peaks are systematically low relative to the natural
+hydrologic relationship. Using the corrected series (from 01d) removes this
+artifact and yields a tighter regression.
+
+This is the key reason 01d runs before 01c: the corrected peaks feed directly
+into the MOVE.3 regression.
+
+## 4.3 Concurrent period diagnostics
+
+```{r concurrent-diagnostics}
+concurrent_diag <- tribble(
+  ~index_gage,                  ~version,    ~n_concurrent, ~r_log,
+  "14033500 (regulated)",       "Old 01c",   29,            0.9291,
+  "14033500 (corrected)",       "New 01c",   29,            0.9550,
+  "14020000 (Gibbon)",          "Both",      29,            0.9182
+)
+
+concurrent_diag %>%
+  kable(caption = "Log-space Pearson correlation with 14020850 during concurrent period (1996–2024)",
+        digits = 4)
+```
+
+The correlation improved from **0.929 to 0.955** after correction — a meaningful
+tightening in a 29-year concurrent window. Removing the regulation noise at the
+index gage cleaned up the relationship.
+
+## 4.4 MOVE.3 regression parameters
+
+```{r move3-diagnostics}
+move3_diag <- tribble(
+  ~index,                    ~version,  ~n1, ~ne, ~r,      ~b_move, ~adj_mean, ~adj_sd,
+  "14033500 (regulated)",    "Old",     29,  26,  0.9291,  1.0256,  3.7692,    0.2732,
+  "14033500 (corrected)",    "New",     29,  26,  0.9550,  1.0426,  3.7632,    0.2702,
+  "14020000 (Gibbon)",       "Both",    29,  26,  0.9182,  1.0667,  3.7173,    0.2745
+)
+
+move3_diag %>%
+  kable(caption = "MOVE.3 regression diagnostics (log-space)",
+        digits = 4)
+```
+
+The corrected index has b~MOVE~ = 1.0426 (vs 1.0256 regulated). The corrected
+index peaks have slightly more variance in log-space (the deficit restoration
+spread the peaks out), pulling the slope closer to a 1:1 relationship.
+
+## 4.5 Flood frequency comparison
+
+```{r frequency-comparison}
+ff_comparison <- tribble(
+  ~method,                            ~Q2,   ~Q5,   ~Q10,   ~Q25,   ~Q50,   ~Q100,
+  "Original (30 yr)",                 5542,  9263,  12199,  16448,  20007,  23909,
+  "MOVE.3 via 14033500 (regulated)",  5900,  9644,  12443,  16303,  19395,  22662,
+  "MOVE.3 via 14033500 (corrected)",  5792,  9415,  12145,  15938,  19001,  22260,
+  "MOVE.3 via 14020000 (Gibbon)",     5149,  8404,  10937,  14566,  17583,  20870,
+  "Weighted MOVE.3 (old, regulated)", 5514,  9020,  11692,  15443,  18501,  21780,
+  "Weighted MOVE.3 (new, corrected)", 5468,  8915,  11553,  15271,  18314,  21588
+)
+
+ff_comparison %>%
+  mutate(across(Q2:Q100, ~ comma(.x))) %>%
+  kable(caption = "Flood frequency comparison at 14020850 (cfs)")
+```
+
+```{r pct-change}
+# Compute % change from original
+orig <- ff_comparison %>% filter(method == "Original (30 yr)")
+
+ff_comparison %>%
+  mutate(across(Q2:Q100, ~ round(100 * (.x - orig[[cur_column()]]) /
+                                   orig[[cur_column()]], 1))) %>%
+  kable(caption = "Percent change from original 30-year record",
+        digits = 1)
+```
+
+The corrected-index MOVE.3 converges toward the Gibbon estimates across the
+board (1.5–2 percentage points closer than the regulated version). The weighted
+combination now gives Q100 = 21,588 cfs (vs 21,780 with the old regulated
+index) — the two index gages tell a more internally consistent story.
+
+## 4.6 Diagnostic plots
+
+```{r move3-plots, eval=TRUE, fig.width=8, fig.height=5, out.width="100%"}
+# These plots execute if the PNGs exist from the 01c pipeline run
+plot_files <- c(
+  "move3_regression_corrected.png",
+  "move3_regression_gibbon.png",
+  "move3_frequency_comparison.png"
+)
+
+for (f in plot_files) {
+  fpath <- file.path(DATA_DIR, f)
+  if (file.exists(fpath)) {
+    cat(paste0("\n\n### ", tools::file_path_sans_ext(f), "\n\n"))
+    knitr::include_graphics(fpath)
+  }
+}
+```
+
+
+---
+
+# 5. Reach Attributes and Stream Power (02)
+
+## 5.1 CMZ data import
+
+`02_reach_attributes_and_scaling.R` imports the DOGAMI CMZ summary spreadsheets
+(Umatilla River and McKay Creek) and builds a unified reach table with geometry,
+erosion rates, avulsion history, confinement classification, and discharge
+estimates.
+
+```{r reach-table, eval=TRUE}
+# Load reach table if available
+reach_path <- file.path(DATA_DIR, "reach_attributes.rds")
+if (file.exists(reach_path)) {
+  reach_tbl <- read_rds(reach_path)
+
+  reach_tbl %>%
+    select(rs, rs_num, assigned_gage, avg_width_ft, slope, sinuosity,
+           median_rate_cw, confinement, q2_reach_cfs, omega_wm2) %>%
+    kable(caption = "Reach attributes summary (selected columns)",
+          digits = c(0, 0, 0, 0, 4, 2, 4, 0, 0, 1))
+} else {
+  message("reach_attributes.rds not found — run 02 first")
+}
+```
+
+## 5.2 Drainage area scaling
+
+Discharge at each reach is estimated via power-law scaling from the assigned
+gage:
+
+$$Q_{\text{reach}} = Q_{\text{gage}} \times \left(\frac{DA_{\text{reach}}}{DA_{\text{gage}}}\right)^\alpha$$
+
+where α is estimated from the log-log regression of Q2 vs DA across the three
+gages.
+
+## 5.3 Unit stream power
+
+Unit stream power (ω, W/m²) is the primary forcing metric:
+
+$$\omega = \frac{\gamma \, Q \, S}{w}$$
+
+where γ = 9810 N/m³, Q is the reference discharge (Q2 as bankfull proxy),
+S is channel slope, and w is bankfull width.
+
+---
+
+# 6. Conceptual Framework — What Gets Used Where
+
+The pipeline produces multiple discharge products that serve different purposes
+in the downstream analysis:
+
+```{r usage-table}
+usage <- tribble(
+  ~reaches,   ~purpose,                          ~discharge_product,
+  "RS 30–39", "Flood frequency + stream power",  "14020000 observed peaks (unregulated)",
+  "RS 9–29",  "Flood frequency + stream power",  "14020850 MOVE.3 extended (weighted, from 01c)",
+  "RS 1–8",   "Natural flood frequency",          "14033500 corrected peaks (from 01d)",
+  "RS 1–8",   "Migration modeling (actual regime)","14033500 observed (regulated) peaks"
+)
+
+kable(usage, caption = "Discharge product assignment by reach group")
+```
+
+The dual use at RS 1–8 reflects a conceptual distinction:
+
+- **Natural flood frequency** (corrected record): answers "what magnitude floods
+  *should* occur at this location absent human modification?" — needed for
+  comparison with geomorphic thresholds and for climate projection baselines.
+
+- **Migration modeling** (regulated record): answers "what flow regime actually
+  *moved* the channel?" — the historical migration data postdate McKay Dam, so
+  the empirical discharge–migration relationship should use the regulated flows
+  that actually drove the observed channel changes.
+
+---
+
+# 7. Next Steps
+
+With the hydrology pipeline complete, the path forward is:
+
+1. **Run B17C** on the weighted MOVE.3 extended record (14020850) and on the
+   corrected 14033500 record via `peakfq_app()`. This gives defensible frequency
+   curves at all three gage positions.
+
+2. **Finalize 02** — update to consume CSV outputs from the refactored pipeline;
+   compute stream power at multiple return periods (not just Q2).
+
+3. **Phase 1a** — develop the empirical discharge–migration model linking flood
+   magnitude to observed erosion rates and avulsion events.
+
+4. **Phase 2** — apply the model to projected future hydrology (RMJOC-II
+   climate scenarios) to assess how changing flow regimes may alter geomorphic
+   work.
+
+---
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```

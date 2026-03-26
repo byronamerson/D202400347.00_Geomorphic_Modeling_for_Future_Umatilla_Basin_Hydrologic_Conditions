@@ -86,7 +86,7 @@ config <- list(
 
   # ---- Output files ----
   output_dir        = "data/",
-  figure_dir        = "figures/",
+  figure_dir        = "plots/",
   panel_csv         = "data/phase1c_avulsion_panel.csv",
   model_comp_csv    = "data/phase1c_model_comparison.csv",
   best_fit_rds      = "data/phase1c_best_fit.rds",
@@ -456,15 +456,19 @@ run_phase_1c <- function(cfg = config) {
   message("--- Loading inputs ---")
   reach_tbl    <- read_csv(cfg$reach_attr_path, show_col_types = FALSE) %>%
     mutate(
+      assigned_gage = as.character(assigned_gage),
       avulsion_susceptibility = factor(avulsion_susceptibility,
         levels = c("not_assessed", "low", "conducive_limited",
                    "conducive_throughout", "infrastructure_conditional",
                    "high_historical")
       )
     )
-  daily_flows  <- read_csv(cfg$daily_flows_path, show_col_types = FALSE)
-  flood_freq   <- read_csv(cfg$flood_freq_path, show_col_types = FALSE)
-  gage_meta    <- read_csv(cfg$gage_meta_path, show_col_types = FALSE)
+  daily_flows  <- read_csv(cfg$daily_flows_path, show_col_types = FALSE) %>%
+    mutate(gage_id = as.character(gage_id))
+  flood_freq   <- read_csv(cfg$flood_freq_path, show_col_types = FALSE) %>%
+    mutate(gage_id = as.character(gage_id))
+  gage_meta    <- read_csv(cfg$gage_meta_path, show_col_types = FALSE) %>%
+    mutate(gage_id = as.character(gage_id))
 
   # ---- Build panel ----
   message("\n--- Building avulsion panel ---")

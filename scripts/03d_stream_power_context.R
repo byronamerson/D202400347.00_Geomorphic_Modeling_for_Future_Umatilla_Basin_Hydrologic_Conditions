@@ -61,7 +61,7 @@ config <- list(
 
   # ---- Output files ----
   output_dir       = "data/",
-  figure_dir       = "figures/",
+  figure_dir       = "plots/",
   threshold_csv    = "data/phase1d_threshold_comparison.csv",
   gradient_csv     = "data/phase1d_omega_gradient.csv",
 
@@ -324,9 +324,12 @@ run_phase_1d <- function(cfg = config) {
 
   # ---- Load data ----
   message("--- Loading inputs ---")
-  reach_tbl  <- read_csv(cfg$reach_attr_path, show_col_types = FALSE)
-  flood_freq <- read_csv(cfg$flood_freq_path, show_col_types = FALSE)
-  gage_meta  <- read_csv(cfg$gage_meta_path, show_col_types = FALSE)
+  reach_tbl  <- read_csv(cfg$reach_attr_path, show_col_types = FALSE) %>%
+    mutate(assigned_gage = as.character(assigned_gage))
+  flood_freq <- read_csv(cfg$flood_freq_path, show_col_types = FALSE) %>%
+    mutate(gage_id = as.character(gage_id))
+  gage_meta  <- read_csv(cfg$gage_meta_path, show_col_types = FALSE) %>%
+    mutate(gage_id = as.character(gage_id))
 
   # ---- Compute omega at multiple RIs ----
   message("\n--- Computing omega at Q2, Q5, Q10, Q50, Q100 ---")

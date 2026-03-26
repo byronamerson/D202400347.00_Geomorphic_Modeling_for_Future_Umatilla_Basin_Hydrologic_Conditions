@@ -63,7 +63,7 @@ library(tidyverse)
 config <- list(
   reach_attr_path       = "data/reach_attributes.csv",
   output_dir            = "data/",
-  figure_dir            = "figures/",
+  figure_dir            = "plots/",
   model_comparison_csv  = "data/phase1a_model_comparison.csv",
   best_fit_rds          = "data/phase1a_best_fit.rds",
   diagnostics_csv       = "data/phase1a_diagnostics.csv",
@@ -95,6 +95,8 @@ load_reach_data <- function(cfg = config) {
   #' meaningful coefficient interpretation.
   read_csv(cfg$reach_attr_path, show_col_types = FALSE) %>%
     mutate(
+      # Ensure gage_id is character (CSV stores USGS site numbers as numeric)
+      assigned_gage = as.character(assigned_gage),
       # Convert to ordered factors for regression
       confinement = factor(confinement,
         levels = c("unconfined", "partly_confined", "confined", "unclassified")

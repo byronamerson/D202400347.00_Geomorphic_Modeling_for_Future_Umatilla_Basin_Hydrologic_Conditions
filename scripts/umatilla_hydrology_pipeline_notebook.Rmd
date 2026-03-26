@@ -13,7 +13,7 @@ output:
     toc_depth: 3
     code_folding: hide
     theme: flatly
-subtitle: '01 → 01b → 01d → 01c → 02: Acquisition, Regulation Correction, Record Extension,
+subtitle: '01 → 01b → 01c → 01d → 02: Acquisition, Regulation Correction, Record Extension,
   Stream Power'
 ---
 
@@ -47,11 +47,11 @@ runs through five scripts in sequence:
 |--------|---------|------------|
 | `01_hydrology_acquisition.R` | Pull USGS daily + peak flows for 3 gages | `peak_flows.csv`, `daily_flows.csv`, flood frequency |
 | `01b_mckay_creek_acquisition.R` | Pull McKay Creek data from USGS + USBR Hydromet | MCKO, MYKO, MCK daily records |
-| `01d_regulation_correction.R` | Reconstruct unregulated peaks at 14033500 | `reconstructed_peaks.csv` |
-| `01c_move3_extension_and_weighting.R` | MOVE.3 extend 14020850 using corrected index | `move3_extended_record.csv` |
+| `01c_regulation_correction.R` | Reconstruct unregulated peaks at 14033500 | `reconstructed_peaks.csv` |
+| `01d_move3_extension_and_weighting.R` | MOVE.3 extend 14020850 using corrected index | `move3_extended_record.csv` |
 | `02_reach_attributes_and_scaling.R` | CMZ import, DA scaling, stream power | `reach_attributes.csv` |
 
-The sequencing is intentional: 01d must run before 01c because the MOVE.3
+The sequencing is intentional: 01c must run before 01d because the MOVE.3
 extension of 14020850 uses the *corrected* 14033500 as its primary index gage.
 
 ---
@@ -298,10 +298,10 @@ record using longer-record index gages, stabilizing the frequency estimates.
 The original 01c used the **regulated** 14033500 record as one index gage. The
 regulation signal from McKay Dam adds noise to the log-space correlation with
 14020850 — the index gage's peaks are systematically low relative to the natural
-hydrologic relationship. Using the corrected series (from 01d) removes this
+hydrologic relationship. Using the corrected series (from 01c) removes this
 artifact and yields a tighter regression.
 
-This is the key reason 01d runs before 01c: the corrected peaks feed directly
+This is the key reason 01c runs before 01d: the corrected peaks feed directly
 into the MOVE.3 regression.
 
 ## 4.3 Concurrent period diagnostics
@@ -453,8 +453,8 @@ in the downstream analysis:
 usage <- tribble(
   ~reaches,   ~purpose,                          ~discharge_product,
   "RS 30–39", "Flood frequency + stream power",  "14020000 observed peaks (unregulated)",
-  "RS 9–29",  "Flood frequency + stream power",  "14020850 MOVE.3 extended (weighted, from 01c)",
-  "RS 1–8",   "Natural flood frequency",          "14033500 corrected peaks (from 01d)",
+  "RS 9–29",  "Flood frequency + stream power",  "14020850 MOVE.3 extended (weighted, from 01d)",
+  "RS 1–8",   "Natural flood frequency",          "14033500 corrected peaks (from 01c)",
   "RS 1–8",   "Migration modeling (actual regime)","14033500 observed (regulated) peaks"
 )
 

@@ -52,7 +52,7 @@ library(readxl)
 
 config <- list(
   # ---- Input files ----
-  xlsx_path       = "Umatilla_River__CMZ_Summary.xlsx",
+  xlsx_path       = "data_in/Umatilla River - CMZ Summary.xlsx",
   gage_meta_path  = "data/gage_metadata.csv",
   flood_freq_path = "data/flood_frequency.csv",
 
@@ -457,8 +457,12 @@ build_complete_reach_table <- function(cfg = config) {
   #' Reads inputs from paths in config; writes .csv output.
 
   # ---- Load upstream outputs ----
-  gage_meta  <- read_csv(cfg$gage_meta_path,  show_col_types = FALSE)
-  flood_freq <- read_csv(cfg$flood_freq_path, show_col_types = FALSE)
+  # Coerce gage_id to character — CSV round-trip stores USGS site numbers
+  # (e.g., 14020000) as numeric, but downstream joins use character keys.
+  gage_meta  <- read_csv(cfg$gage_meta_path,  show_col_types = FALSE) %>%
+    mutate(gage_id = as.character(gage_id))
+  flood_freq <- read_csv(cfg$flood_freq_path, show_col_types = FALSE) %>%
+    mutate(gage_id = as.character(gage_id))
 
   message("--- Importing CMZ summary data ---")
   reach_tbl <- build_reach_table(cfg$xlsx_path)
@@ -513,5 +517,5 @@ build_complete_reach_table <- function(cfg = config) {
 # =============================================================================
 # EXECUTE
 # Run after 01_hydrology_acquisition.R has been executed and .csv outputs exist.
-# reach_tbl <- build_complete_reach_table()
+reach_tbl <- build_complete_reach_table()
 # =============================================================================

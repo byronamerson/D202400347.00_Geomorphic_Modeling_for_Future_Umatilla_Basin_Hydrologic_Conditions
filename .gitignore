@@ -1,8 +1,3 @@
-git init
-```
-
-Create a `.gitignore`:
-```
 # Data files
 data/
 *.csv
@@ -21,6 +16,8 @@ data_out/
 *.xlsx
 *.rds
 *.parquet
+
+docs/derived/
 
 # Plots and figures
 plots/

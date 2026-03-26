@@ -1,7 +1,7 @@
 # =============================================================================
-# 01d_regulation_correction.R
+# 01c_regulation_correction.R
 # Discharge-Channel Migration Analysis
-# Phase 1d: Dam Regulation Correction for a Mainstem Gage
+# Phase 1c: Dam Regulation Correction for a Mainstem Gage
 # =============================================================================
 #
 # Purpose: Reconstruct unregulated peak flows at a regulated mainstem gage

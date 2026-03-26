@@ -1,7 +1,7 @@
 # =============================================================================
-# 01c_move3_extension_and_weighting.R
+# 01d_move3_extension_and_weighting.R
 # Umatilla River Discharge-Channel Migration Analysis
-# Phase 1c: MOVE.3 Record Extension & Inverse-Variance Weighting for
+# Phase 1d: MOVE.3 Record Extension & Inverse-Variance Weighting for
 #           USGS 14020850 (Pendleton)
 # =============================================================================
 #
@@ -13,7 +13,7 @@
 #
 # Index Gages:
 #   - 14033500 (Umatilla R near Umatilla): CORRECTED for McKay Dam
-#     regulation via 01d. Using the corrected series removes the regulation
+#     regulation via 01c. Using the corrected series removes the regulation
 #     signal that would otherwise distort the inter-gage log-space
 #     correlation. The corrected peaks represent the natural flow regime
 #     at the downstream gage.
@@ -29,9 +29,9 @@
 #   relationship would predict. Using the corrected series yields a
 #   tighter, more physically defensible regression.
 #
-# Inputs (from 01, 01d):
+# Inputs (from 01, 01c):
 #   data/peak_flows.csv                  — all three Umatilla gages (from 01)
-#   data/reconstructed_peaks.csv         — corrected 14033500 peaks (from 01d)
+#   data/reconstructed_peaks.csv         — corrected 14033500 peaks (from 01c)
 #
 # Outputs:
 #   data/move3_extended_record.csv       — extended peak series for 14020850
@@ -84,7 +84,7 @@ load_move3_inputs <- function(data_dir = "data/") {
   #' Load peak flow data for the target gage and both index gages.
   #'
   #' Target (14020850): read from peak_flows.csv (observed record).
-  #' Index 14033500:     read from reconstructed_peaks.csv (corrected by 01d).
+  #' Index 14033500:     read from reconstructed_peaks.csv (corrected by 01c).
   #' Index 14020000:     read from peak_flows.csv (unregulated, as-is).
   #'
   #' @param data_dir Path to data directory
@@ -109,7 +109,7 @@ load_move3_inputs <- function(data_dir = "data/") {
     select(water_year, peak_q_cfs) %>%
     filter(!is.na(peak_q_cfs), peak_q_cfs > 0)
   
-  # Use the unregulated (corrected) peak series from 01d for 14033500.
+  # Use the unregulated (corrected) peak series from 01c for 14033500.
   # The column is peak_q_unreg_cfs — the reconstructed natural peak.
   index_corrected <- corrected_peaks %>%
     select(water_year, peak_q_cfs = peak_q_unreg_cfs) %>%

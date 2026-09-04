@@ -627,3 +627,92 @@ The project now has:
 The main unresolved issue carried forward is how to handle the
 `2011-2012` interval and, more broadly, how much weight to give the raw
 consecutive sequence versus the alternate partition variants.
+
+### 2026-03-27 Continuation: RS 30 modeling reflection and hydrology pivot
+
+This continuation records what changed after the original first-pass interval
+plots and why the project is now pivoting toward richer forcing metrics.
+
+#### What was added
+
+- `scripts/01e_pendleton_synthetic_peaks.R`
+  - builds a synthetic Pendleton (`14020850`) annual-peak series back to WY
+    `1952` using the same manual MOVE.3-style extension logic already used in
+    `01d`
+  - uses the corrected `14033500` series from `01c` as the primary synthetic
+    Pendleton record for geomorphic interval work
+  - writes `data/pendleton_synthetic_peaks.csv`
+- `scripts/rs30_interval_sandbox.R`
+  - now points at `data/pendleton_synthetic_peaks.csv` for RS 30 interval
+    forcing
+  - now computes `jaccard_change` as a dimensionless interval change metric:
+    `1 - overlap / union`
+- `scripts/rs30_modeling_sandbox.R`
+  - sources `rs30_interval_sandbox.R`
+  - stages exploratory linear modeling objects with `broom`
+  - includes serial exclusion-rule fits for:
+    - `symmetric_change_ft2_per_year`
+    - `new_area_ft2_per_year`
+    - `abandoned_area_ft2_per_year`
+  - includes a response-matrix scan across existing response metrics,
+    including `jaccard_change`
+
+#### Current substantive interpretation
+
+- The synthetic Pendleton record solved the coverage problem for the photo
+  interval series. RS 30 forcing can now span the HMA period rather than
+  truncating at the observed Pendleton record start.
+- The `2011-2012` interval is currently treated as spurious in the modeling
+  sandbox and excluded from all exploratory modeling objects.
+  - Reason: visual review of the air photos suggests the mapped magnitude of
+    change in the `2009-2012` HMA sequence is not commensurate with the peak
+    flow story implied by the current data products.
+  - Planned follow-up: contact the DOGAMI / dataset authors to understand how
+    the `2009-2012` HMA products were developed before deciding whether that
+    interval should ever be reinstated.
+- Peak-flow-only models remain weak.
+  - Multiple response variables were tried, including area-based rates and the
+    dimensionless `jaccard_change` metric.
+  - None of the first-pass peak-only linear relationships looked strong enough
+    to inspire confidence as a forecasting model by themselves.
+- Even so, a few qualitative patterns remain physically suggestive.
+  - In particular, the negative relationship between `abandoned_area` and peak
+    flow feels geomorphically coherent: larger floods appear more likely to
+    recruit or reoccupy corridor area than to abandon it, barring a large
+    avulsion into a wholly new path.
+
+#### Why the project is pivoting
+
+The long-term objective is not just to explain past RS 30 interval behavior,
+but to build a response model that can be paired with climate-scenario
+hydrology to estimate how channel-change magnitude may shift in the future.
+
+That objective now points away from continuing to shuffle response variables in
+isolation and toward developing better interval-scale forcing metrics. The key
+insight from this session is that peak annual maximum flow alone is probably
+too weak a proxy for geomorphic work at this reach and interval scale.
+
+#### Next major workflow
+
+Build a parallel hydrology data-ingestion and munging workflow centered on
+daily discharge, using `dataRetrieval`.
+
+Current lean for that workflow:
+
+- create a new hydrology-acquisition branch of the pipeline that pulls at least
+  daily flow series for the relevant gages
+- treat daily data as the base product and derive interval-scale forcing
+  metrics from it later
+- defer 15-minute ingestion for now because it is likely bulkier than needed
+  for the first round of interval forcing development, even though it remains a
+  viable later option
+- prioritize interval-scale metrics that can also be computed from future
+  climate-scenario hydrographs, especially:
+  - duration above threshold
+  - count of threshold exceedances
+  - cumulative exceedance above threshold
+  - other cumulative high-flow summaries
+
+In other words: the exploratory RS 30 response-side work was useful, but the
+next promising source of signal is richer hydrologic forcing derived from daily
+records rather than more permutations of peak-only models.

@@ -72,7 +72,7 @@ config <- list(
   cmz_layer = "Umatilla_River_CMZ",
   target_segment = 30L,
   composite_note = "Merged 1952-2022 historical and 2024 active channel. Small gaps filled in.",
-  peak_flows_csv = "data/peak_flows.csv",
+  peak_flows_csv = "data/pendleton_synthetic_peaks.csv",
   plot_gage_id = "14020850",
   plot_gage_label = "Pendleton"
 )
@@ -174,6 +174,9 @@ compute_interval_metrics <- function(geom_t1, geom_t2, interval_years, segment_l
   abandoned_area_ft2 <- as.numeric(st_area(abandoned_geom))
   symmetric_change_ft2 <- as.numeric(st_area(symmetric_change_geom))
   net_area_change_ft2 <- area_t2 - area_t1
+  union_ft2 <- area_t1 + area_t2 - overlap_ft2
+  jaccard_similarity <- overlap_ft2 / union_ft2
+  jaccard_change <- 1 - jaccard_similarity
 
   tibble(
     area_t1_ft2 = area_t1,
@@ -183,6 +186,9 @@ compute_interval_metrics <- function(geom_t1, geom_t2, interval_years, segment_l
     abandoned_area_ft2 = abandoned_area_ft2,
     symmetric_change_ft2 = symmetric_change_ft2,
     net_area_change_ft2 = net_area_change_ft2,
+    union_ft2 = union_ft2,
+    jaccard_similarity = jaccard_similarity,
+    jaccard_change = jaccard_change,
     new_area_ft2_per_year = new_area_ft2 / interval_years,
     abandoned_area_ft2_per_year = abandoned_area_ft2 / interval_years,
     symmetric_change_ft2_per_year = symmetric_change_ft2 / interval_years,
@@ -241,7 +247,17 @@ read_peak_flows_table <- function(peak_flows_csv) {
   readr::read_csv(
     peak_flows_csv,
     show_col_types = FALSE
-  )
+  ) %>%
+    mutate(
+      gage_id = as.character(gage_id)
+    ) %>%
+    {
+      if ("peak_date" %in% names(.)) {
+        .
+      } else {
+        mutate(., peak_date = as.Date(NA))
+      }
+    }
 }
 
 # Build yearly and interval peak-flow tables aligned to HMA intervals using water years.
@@ -500,10 +516,10 @@ rs30_cmz <- select_cmz_segment(
   target_segment = config$target_segment
 )
 
-rs30_length_ft <- rs30_cmz %>%
-  st_drop_geometry() %>%
-  summarise(segment_length_ft = sum(Shape_Length)) %>%
-  pull(segment_length_ft)
+# Use the analyst-measured RS 30 valley-bottom length for length normalization.
+# This replaces the earlier Shape_Length-derived placeholder, which was not a
+# defensible reach-length denominator for the activity-style metrics.
+rs30_length_ft <- 9950
 
 rs30_hma <- clip_dated_hma_to_segment(
   hma = hma,
@@ -592,7 +608,7 @@ rs30_plot_new_area <- make_interval_peak_plot(
   response_label = "New area rate (ft^2/year)"
 )
 
-rs30_plot_symmetric_change <- make_interval_peak_plot(
+rs30_plot_symmetric_change_classified <- make_interval_peak_plot(
   plot_tbl = rs30_plot_data,
   response_col = "symmetric_change_ft2_per_year",
   response_label = "Symmetric change rate (ft^2/year)"
@@ -603,6 +619,28 @@ rs30_plot_net_area_change <- make_interval_peak_plot(
   response_col = "net_area_change_ft2_per_year",
   response_label = "Net area change rate (ft^2/year)"
 )
+
+# Show the full consecutive HMA record without the interval-length classification.
+rs30_plot_symmetric_change <- ggplot(
+  rs30_plot_data,
+  aes(
+    x = q_peak_max_cfs,
+    y = symmetric_change_ft2_per_year,
+    label = interval_label
+  )
+) +
+  geom_point(size = 2.8, color = "#2c7fb8") +
+  geom_text(
+    nudge_y = 0.02 * max(rs30_plot_data$symmetric_change_ft2_per_year, na.rm = TRUE),
+    check_overlap = TRUE
+  ) +
+  labs(
+    x = paste0(config$plot_gage_label, " interval maximum annual peak flow (cfs)"),
+    y = "Symmetric change rate (ft^2/year)",
+    title = "RS 30: Symmetric change rate (ft^2/year) vs interval peak flow",
+    subtitle = "Points labeled by consecutive HMA interval across the full RS 30 record"
+  ) +
+  theme_minimal(base_size = 11)
 
 # =============================================================================
 # 7. BACKWARD PARTITION VARIANTS

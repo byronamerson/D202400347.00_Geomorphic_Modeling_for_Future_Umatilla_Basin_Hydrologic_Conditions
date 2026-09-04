@@ -1,0 +1,75 @@
+SCHEDULE A: Scope of Work
+Project Objective: Develop a predictive model that correlates historic stream discharge patterns 
+with documented channel changes in the Umatilla River. This model will establish quantifiable 
+relationships between flood magnitude, stream force, and resulting geomorphic adjustments. This 
+foundational work will set the stage for a subsequent phase where projected future flow regimes 
+could be applied to estimate channel migration and morphological changes over the next 50-100 
+years, ultimately informing effects on First Foods and guiding flood hazard mitigation strategies.
+Hypothesis: Projected changes in hydrologic patterns (non-stationarity) may significantly alter the 
+frequency, magnitude, and timing of geomorphic processes in the Umatilla River, leading to 
+quantifiable changes in channel migration rates, floodplain connectivity, and natural feature 
+structure. Specifically, increased variability between feature-restructuring large floods and 
+maintenance-level moderate floods will disrupt the equilibrium of aquatic and floodplain systems 
+that support First Foods.
+
+Rationale: The 2020 Umatilla River flood demonstrated how aquatic features and freshwater 
+conditions are vulnerable to hydrologic non-stationarity. The Future Flows for the Upper Umatilla 
+River study forecasts increased flow variability in this watershed. As precipitation transitions 
+from snow to rain, the river will likely experience higher winter flows. Regional patterns such as 
+atmospheric streams are projected to increase in both frequency and intensity by the late century. 
+This shift creates a concerning pattern of increased flood magnitude alongside greater variability 
+between large floods that cause system disturbance with long recovery times and moderate floods 
+that maintain system health.
+These hydrologic shifts directly impact natural processes that sustain First Foods as described in 
+the River Vision and Upland Vision reports. The Oregon Department of Geology and Mineral Industries 
+(DOGAMI) has mapped historic stream channels to assess future channel migration dangers using 
+Washington State's Channel Migration Zone (CMZ) protocol. CMZ mapping of the Umatilla River and 
+lower McKay Creek is underway. Colorado has developed a Fluvial Danger Zone (FDZ) protocol that 
+incorporates stream force (energy available for geomorphic work) associated with floods. Stream 
+force scales with flood magnitude, and river channel migration is linked to large floods that 
+perform more geomorphic work. Connecting stream force, flood frequency, and historic channel 
+migration provides a mechanistic link between natural processes that create and maintain aquatic 
+and floodplain systems.
+
+This project seeks to understand how hydrologic non-stationarity changes the geomorphic processes 
+supporting First Foods, with critical implications for natural resource management in the region. 
+Understanding these natural system relationships is essential for developing effective conservation 
+strategies that protect cultural resources and natural benefits under evolving land and atmospheric 
+conditions. Recognizing that flood danger and channel migration are conceptually linked, we will 
+develop a model correlating historic channel adjustment with the Umatilla River flood record. This 
+model will function as a predictive tool to estimate potential channel adjustments under future 
+flow regimes for the next 50-100 years.
+Scope and Tasks
+
+1) Project Management
+2) Data Acquisition and Assessment
+a) DOGAMI Umatilla River channel migration zone report and map
+b) Umatilla River stream discharge records
+c) Predicted Umatilla hydrology based on non-stationary hydrologic scenarios
+i)  UW Predicted Hydrology
+
+PROFESSIONAL SERVICES AGREEMENT – Environmental Science Associates
+ii) Umatilla Future Flows Project
+3) Analysis Phase 1:
+a) Develop discharge-channel adjustment model based on historic record
+b) Develop estimates of stream force associated with channel adjustment
+
+
+4) Analysis Phase 2:
+a) Develop a predicted channel adjustment model based on predicted hydrology
+5) Reporting
+a) Produce a report that includes:
+i)  a conceptual model linking flood dangers, ecohydrology, and First Foods to hydrologic 
+non-stationarity, and
+ii) the methods and results of the analysis
+
+
+6) Presentation
+a) Travel to Pendleton to present the study findings
+
+
+7) Scheduled Check-in Meetings with WRP
+a) January 2026 via Teams
+b) May 2026 via Teams
+c) Other meetings as needed via Teams
+d) In-person meeting September 2026

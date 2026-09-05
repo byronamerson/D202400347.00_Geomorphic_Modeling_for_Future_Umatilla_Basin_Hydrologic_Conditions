@@ -52,7 +52,7 @@ library(readxl)
 
 config <- list(
   # ---- Input files ----
-  xlsx_path       = "data_in/Umatilla River - CMZ Summary.xlsx",
+  xlsx_path       = "data_in/DOGAMI_Umatilla_CMZ_spreadsheets/Umatilla_River_CMZ_Summary.xlsx",
   gage_meta_path  = "data/gage_metadata.csv",
   flood_freq_path = "data/flood_frequency.csv",
 

@@ -97,12 +97,16 @@ QMAP_PROBS <- sort(unique(c(
 read_umamc_streamflow <- function(path) {
   #' Read one UMAMC daily-streamflow file (raw RMJOC-II output).
   #' The ~30-line provenance header is comment-marked with '#'; the first
-  #' non-comment line is the "date,streamflow" header. Gaps are -9999 -> NA.
+  #' non-comment line is the column header. NB the DYNAMICAL downscaling variant
+  #' ships an UNNAMED first column (header ",streamflow") while BCSD/MACA use
+  #' "date,streamflow" -- so read the two columns by POSITION, not by name
+  #' (col 1 = date, col 2 = streamflow in every variant). Gaps are -9999 -> NA.
   #' @param path path to a *-UMAMC-streamflow-1.0.csv file
   #' @return tibble(date <Date>, q_cfs <dbl>)
-  read_csv(path, comment = "#", show_col_types = FALSE,
-           col_types = cols(date = col_date(), streamflow = col_double())) %>%
-    transmute(date, q_cfs = na_if(streamflow, MISSING_VALUE))
+  raw <- read_csv(path, comment = "#", show_col_types = FALSE,
+                  col_types = cols(.default = col_character()))
+  tibble(date  = as.Date(raw[[1]]),
+         q_cfs = na_if(as.double(raw[[2]]), MISSING_VALUE))
 }
 
 livneh_path <- function(member) {

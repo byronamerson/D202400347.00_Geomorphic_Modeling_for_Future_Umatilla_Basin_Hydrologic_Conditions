@@ -31,6 +31,11 @@
 #                                  window, in cfs-days (magnitude x duration above
 #                                  threshold = the "effective discharge" / work
 #                                  proxy; x 86,400 for ft^3, or x 1.983 for acre-ft)
+#   - sum_peak_excess_cfs        : sum over every above-threshold flood span of
+#                                  (span peak daily Q - threshold), in cfs. Every
+#                                  crest weighted by height, duration stripped out
+#                                  (the crest-driven forcing lens; <= cum_excess
+#                                  by construction). See NOTE_projection_framing.
 #   - n_events_thresh            : number of discrete flood events (strictly
 #                                  consecutive runs of days >= threshold)
 #   - max_duration_thresh_days   : longest strictly-consecutive run of days >=
@@ -93,18 +98,23 @@ add_water_year <- function(daily, date_col = "date") {
            if_else(as.integer(format(d, "%m")) >= 10L, 1L, 0L))
 }
 
-consecutive_run_lengths <- function(dates) {
-  #' Lengths of every strictly-consecutive run of calendar days in a date set.
-  #' A gap of more than one calendar day (a below-threshold or absent day) ends
-  #' a run — correct even with the sparse pre-1995 record. This one definition of
-  #' a flood "span" feeds every span-based metric, so the event count, the total
-  #' duration, and the longest run stay mutually consistent by construction.
-  #' @param dates Date vector of threshold-exceeding days
-  #' @return integer vector of run lengths (empty if none); sum() == length(dates)
-  if (length(dates) == 0L) return(integer(0))
-  d <- sort(unique(dates))
-  run_id <- cumsum(c(TRUE, as.integer(diff(d)) > 1L))  # a >1-day gap ends a run
-  as.integer(tabulate(run_id))
+flood_spans <- function(above) {
+  #' Reduce the above-threshold days of a window to one row per flood "span".
+  #' A span is a strictly-consecutive run of above-threshold days; a gap of more
+  #' than one calendar day (a below-threshold or absent day) ends a span. This
+  #' single span definition feeds every span-based metric — the event count, the
+  #' longest duration, and the summed-crest excess — so they stay mutually
+  #' consistent by construction. Correct even with the sparse pre-1995 record.
+  #' @param above tibble of threshold-exceeding days (date, daily_q_cfs)
+  #' @return tibble(len, peak), one row per span; sum(len) == nrow(above).
+  #'   Empty (0 rows) when no day is above threshold.
+  if (nrow(above) == 0L) return(tibble(len = integer(0), peak = numeric(0)))
+  a  <- arrange(above, date)
+  id <- cumsum(c(TRUE, as.integer(diff(a$date)) > 1L))  # a >1-day gap ends a span
+  tibble(q = a$daily_q_cfs, span = id) %>%
+    group_by(span) %>%
+    summarise(len = dplyr::n(), peak = max(q), .groups = "drop") %>%
+    select(len, peak)
 }
 
 
@@ -118,16 +128,17 @@ compute_interval_forcing <- function(window, threshold_cfs) {
   #' @param threshold_cfs metric (exceedance) threshold in cfs
   #' @return one-row tibble of forcing metrics (see file header)
   above <- filter(window, daily_q_cfs >= threshold_cfs)
-  spans <- consecutive_run_lengths(above$date)   # one canonical set of flood spans
-  stopifnot(sum(spans) == nrow(above))           # every above-day is in exactly one span
+  spans <- flood_spans(above)                    # one canonical set of flood spans
+  stopifnot(sum(spans$len) == nrow(above))       # every above-day is in exactly one span
   tibble(
     n_window_days              = nrow(window),
     q_peak_daily_cfs           = if (nrow(window)) max(window$daily_q_cfs) else NA_real_,
     threshold_cfs              = threshold_cfs,
     days_above_thresh          = nrow(above),
     cum_excess_thresh_cfs_days = sum(pmax(0, window$daily_q_cfs - threshold_cfs)),
-    n_events_thresh            = length(spans),
-    max_duration_thresh_days   = if (length(spans)) max(spans) else 0L,
+    sum_peak_excess_cfs        = sum(spans$peak - threshold_cfs),  # every crest, above thresh
+    n_events_thresh            = nrow(spans),
+    max_duration_thresh_days   = if (nrow(spans)) max(spans$len) else 0L,
     any_estimated              = any(window$is_estimated)
   )
 }

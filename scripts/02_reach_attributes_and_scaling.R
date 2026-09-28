@@ -115,7 +115,7 @@ import_summary_table <- function(xlsx_path) {
       us_station_ft   = 3,   # upstream stream station
       length_ft       = 4,
       avg_width_ft    = 5,
-      slope_pct       = 6,
+      slope_ftft      = 6,   # header reads "Slope (%)" but values are ft/ft
       sinuosity       = 7,
       median_rate_ftyr = 8,  # median EHA erosion rate (ft/yr)
       max_rate_ftyr   = 9,   # maximum EHA erosion rate (ft/yr)
@@ -125,14 +125,34 @@ import_summary_table <- function(xlsx_path) {
     filter(str_detect(rs, "^RS\\s*\\d+$")) %>%
     mutate(
       rs_num = parse_number(rs),
-      # Convert slope from percent to dimensionless (m/m)
-      slope  = slope_pct / 100,
+      # UNITS - do NOT divide by 100. The workbook's "Slope (%)" column already
+      # holds dimensionless ft/ft. Proof: length-weighted across the 39 reaches
+      # it implies ~1,770 ft of fall over 82.6 mi, matching the Umatilla's
+      # actual drop; read as percent it would imply 17.7 ft, impossible.
+      # Fixed 2026-09-17 (flagged 2026-08-13). Every omega value produced
+      # before this date is 100x low. Guarded by check_slope_units().
+      slope  = slope_ftft,
       # Dimensionless erosion rates (channel widths per year)
       # Following Nanson & Hickin (1986) convention for cross-system comparison
       median_rate_cw = median_rate_ftyr / avg_width_ft,
       max_rate_cw    = max_rate_ftyr / avg_width_ft
     ) %>%
     arrange(rs_num)
+}
+
+check_slope_units <- function(reach_tbl) {
+  #' Guard against re-introducing the slope /100 units bug.
+  #' The Umatilla falls ~1,770 ft over the 82.6-mi CMZ extent, so the
+  #' length-weighted sum S_i * L_i must land near that value. A factor-of-100
+  #' error in either direction lands at ~18 ft or ~177,000 ft and trips this.
+  total_fall_ft <- sum(reach_tbl$slope * reach_tbl$length_ft, na.rm = TRUE)
+  if (total_fall_ft < 800 || total_fall_ft > 4000) {
+    stop("Slope units check FAILED: implied total fall = ",
+         round(total_fall_ft), " ft; expected ~1,770 ft. The CMZ workbook's ",
+         "'Slope (%)' column holds dimensionless ft/ft - do not rescale it.")
+  }
+  message("  Slope units OK - implied total fall ", round(total_fall_ft), " ft")
+  invisible(reach_tbl)
 }
 
 import_eha_table <- function(xlsx_path) {
@@ -466,6 +486,7 @@ build_complete_reach_table <- function(cfg = config) {
 
   message("--- Importing CMZ summary data ---")
   reach_tbl <- build_reach_table(cfg$xlsx_path)
+  check_slope_units(reach_tbl)
 
   message("--- Classifying reaches ---")
   reach_tbl <- reach_tbl %>%

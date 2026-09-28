@@ -25,6 +25,11 @@ plots/
 *.pdf
 *.jpg
 
+# Document build artifacts (keep the .md source, not the renders)
+*.aux
+docs/*.tex
+docs/*.html
+
 # R environment
 .Rproj.user/
 .Rhistory

@@ -69,11 +69,21 @@ PRIMARY_METRIC <- "cum_excess"
 
 # The forcing metrics available to the model. `var` is the scaled panel column;
 # `source` its raw (cfs / cfs-days) column from 04c; `label` for plots.
+# Threshold label, DERIVED from the 04c config so it can never drift from the
+# actual metric threshold (metric_fraction x Q2). 1.0 -> "> Q2"; otherwise
+# "> <frac>xQ2 (bankfull ~<cfs>)". Fixes the old hardcoded "> Q2" that went stale
+# when the model of record moved to 0.75xQ2.
+.thr_lab <- local({
+  frac <- cfg_num("metric_fraction")
+  if (isTRUE(all.equal(frac, 1))) "> Q2"
+  else sprintf("> %gxQ2 (bankfull ~%d cfs)", frac, round(frac * cfg_num("q2_target_cfs")))
+})
+
 MODEL_METRICS <- list(
   cum_excess = list(var = "cum_excess_k", source = "cum_excess_thresh_cfs_days",
-                    label = "Cumulative excess > Q2 (1000 cfs-days)"),
+                    label = sprintf("Cumulative excess %s (1000 cfs-days)", .thr_lab)),
   sum_peak   = list(var = "sum_peak_k",   source = "sum_peak_excess_cfs",
-                    label = "Summed crest excess > Q2 (1000 cfs-days)")
+                    label = sprintf("Summed crest excess %s (1000 cfs-days)", .thr_lab))
 )
 
 
@@ -275,6 +285,14 @@ iwalk(models, function(m, k) {
   write_csv(coef_table(eq), out)
   cat("  -> wrote", out, "\n")
 })
+
+# Save the fitted model of record (cum_excess) as .rds. Fitted model objects are
+# the sanctioned .rds exception (NOTE_data_format_standards.md); the coefficient
+# CSV cannot feed merTools::predictInterval, which needs the live merMod -- used
+# by 12's model-error whiskers.
+model_rds <- "data/forcing_model_cum_excess.rds"
+write_rds(models[[PRIMARY_METRIC]], model_rds)
+cat("  -> wrote", model_rds, "(fitted model of record)\n")
 
 # Verification: equation extraction reproduces lme4's fit exactly.
 cat("\n=== Verify: hand-built equation vs lme4 fitted() ===\n")

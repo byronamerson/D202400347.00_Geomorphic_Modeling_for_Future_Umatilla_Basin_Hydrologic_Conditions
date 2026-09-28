@@ -75,7 +75,9 @@ library(tidyverse)
 config <- tribble(
   ~parameter,             ~value,
   "q2_target_cfs",        "5542",     # Pendleton Q2 (post-McKay-correction B17C)
-  "metric_fraction",      "1.0",      # metric threshold = fraction x Q2 (1.0 = Q2)
+  "metric_fraction",      "0.75",     # metric threshold = fraction x Q2. 0.75 = bankfull
+                                       # (~4,156 cfs), the MODEL OF RECORD (verified 2026-09-07
+                                       # vs B17C LP3: 0.75xQ2 = 1.46-yr flood). 1.0 = Q2 (superseded).
   "extended_record_rds",  "data/pendleton_daily_extended.rds",
   "forcing_csv",          "data/interval_forcing_metrics.csv"
 )

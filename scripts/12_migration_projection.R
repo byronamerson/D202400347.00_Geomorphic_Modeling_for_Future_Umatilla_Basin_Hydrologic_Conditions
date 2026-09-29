@@ -2,46 +2,54 @@
 # 12_migration_projection.R
 # Umatilla River Discharge-Channel Migration Analysis
 # Phase 12 (projection Step 3): apply the frozen model of record to future forcing
-#          -> per-reach migration rate by 30-year climate normal, as CHANGE and
-#             as ABSOLUTE annual rate.
+#          -> per-reach migration rate by reporting period, as CHANGE and as
+#             ABSOLUTE annual rate.
 # =============================================================================
 #
-# Fit once, apply per period. The migration model is FIXED (m_B2, 08, on the
-# historical record); here we only APPLY its reach coefficients to each period's
-# forcing. Two views come out of the same construction:
+# Fit once, apply per period. The migration model is FIXED (m_B2, on the historical
+# record); here we only APPLY its reach coefficients to each period's forcing. Two
+# views come out of the same construction:
 #
 #   d rate (change vs historical):
 #     d_rate = reach_slope * (F_period - F_hist) / 1000                 [ft/yr]
 #     -- the per-interval intercept + baseline cancel in the delta.
 #
-#   Absolute annual rate (m_B2 prediction, annualized over a 30-yr normal):
+#   Absolute annual rate (m_B2 prediction, annualized over the period):
 #     rate  = floor_reach + reach_slope * F_period / 1000               [ft/yr]
-#     floor_reach = baseline_per_year + reach_intercept / T_NORM
+#     floor_reach = baseline_per_year + reach_intercept / t_norm
 #     -- baseline_per_year is the shared flood-independent background rate;
 #        reach_intercept is a per-INTERVAL offset, so it is annualized over the
-#        normal length (T_NORM = 30). The absolute rate is the delta trajectory
-#        shifted up per reach by that reach's historical rate, so the two plots
-#        stay exactly consistent (floor + reach_slope*F_hist cancels in the delta).
+#        period length. The absolute rate is the delta trajectory shifted up per
+#        reach by that reach's historical rate, so the two plots stay exactly
+#        consistent (floor + reach_slope*F_hist cancels in the delta).
 #     Convention settled with Byron 2026-09-08 (reach-specific floor).
 #
 #     F_period = member's mean annual cum_excess > 0.75xQ2 (cfs-days) in the period
 #     F_hist   = observed record's mean annual cum_excess (the historical anchor)
 #     /1000    = cfs-days -> the model's "per 1000 cfs-days" slope units
 #
-# Grain: three 30-year climate normals (2010-2039, 2040-2069, 2070-2099) + the
-# observed baseline. Trajectory anchored on the 160 full-century members
-# (BCSD+MACA); the 12 dynamical/WRF members stop ~2069 (composition would drift).
-# Ensemble handling: RCP = two reported cases; the other axes pool into a
-# median + 10/90 band.
+# t_norm IS A PROPERTY OF THE PERIOD TABLE (Byron, 2026-09-29), not a script
+#   constant. It was `T_NORM <- 30L`, correct only while every reporting period was
+#   a 30-year normal. It is now carried per period from the table, so a track with
+#   20-year periods annualizes the intercept over 20. CONSEQUENCE, accepted: the
+#   observed anchor is a modeled point too, so it sits HIGHER on a track with
+#   shorter periods (RS30: 2.56 ft/yr at t_norm 30, 3.15 at 20). Internally
+#   consistent within a track; the two tracks' absolute-rate figures cannot be read
+#   against each other by eye. The delta view is unaffected -- the floor cancels.
 #
-# Inputs : data/future_forcing_annual_by_period.csv        (per-year forcing, from 11)
-#          data/forcing_model_coefficients_cum_excess.csv  (m_B2 coefficients, from 08)
-#          data/forcing_model_cum_excess.rds               (m_B2 fitted object, from 08)
-# Outputs: data/migration_dArate_by_member.csv    (reach x member x period, delta)
-#          data/migration_dArate_summary.csv      (reach x scenario x period, delta band)
-#          data/migration_rate_summary.csv        (reach x scenario x period, absolute band)
-#          plots/migration_trajectory.png         (delta vs historical)
-#          plots/migration_rate_trajectory.png    (absolute annual rate + model-error whiskers)
+# NOTHING RUNS ON SOURCE. This file defines the chain; a runner selects the track,
+# its forcing table and its period table. Same shape as 10 / 11.
+#   - scripts/12b_migration_projection_era_k.R            statistical, 160 members
+#   - scripts/12c_migration_projection_era_k_dynamical.R  dynamical, 12 members
+#
+# Track selection happens UPSTREAM now: 11b / 11c each write their own forcing
+#   table from their own bias-correction manifest, so the old
+#   TRAJECTORY_DOWNSCALINGS filter is gone. A forcing table holds one track.
+#
+# Inputs : a per-year forcing table from 11b / 11c
+#          data/forcing_model_coefficients_cum_excess.csv  (m_B2 coefficients)
+#          data/forcing_model_cum_excess.rds               (m_B2 fitted object)
+# Outputs: per-track, suffixed -- see out_paths().
 # Style  : Tidyverse & FP guidelines (docs/lingua.md, docs/r-principles.md) --
 #          pure contracted helpers, I/O at the orchestrator boundary.
 # =============================================================================
@@ -55,57 +63,87 @@ library(merTools)   # predictInterval() for the model-error whiskers
 
 
 # =============================================================================
-# 1. CONFIGURATION
+# 1. CONFIGURATION  (track-invariant only; per-track settings are arguments)
 # =============================================================================
 
-ANNUAL_CSV      <- "data/future_forcing_annual_by_period.csv"
-COEF_CSV        <- "data/forcing_model_coefficients_cum_excess.csv"
-OUT_MEMBER      <- "data/migration_dArate_by_member.csv"
-OUT_SUMMARY     <- "data/migration_dArate_summary.csv"
-OUT_SUMMARY_ABS <- "data/migration_rate_summary.csv"
-OUT_PLOT        <- "plots/migration_trajectory.png"
-OUT_PLOT_ABS    <- "plots/migration_rate_trajectory.png"
-OUT_PLOT_VIOLIN <- "plots/migration_dArate_violin.png"
-OUT_PLOT_RAINCLOUD <- "plots/migration_rate_raincloud.png"  # abs-rate raincloud (12c, folded in)
-
-# Three 30-year climate normals (the settled grain). Config-driven: change the
-# table, nothing else. Windows are contiguous and share no boundary year, so the
-# inclusive between()-join below tags each water year to exactly one normal.
-NORMALS <- tribble(
-  ~period,       ~y1,    ~y2,
-  "2010-2039",   2010L,  2039L,
-  "2040-2069",   2040L,  2069L,
-  "2070-2099",   2070L,  2099L
-)
-
-# Trajectory ensemble = the statistical downscalings (full-century, constant set).
-# Dynamical members stop ~2069, so including them would change ensemble
-# composition between the near/mid and late normals.
-TRAJECTORY_DOWNSCALINGS <- c("BCSD", "MACA")
-
-# Normal length (years). Annualizes the per-interval reach_intercept for the
-# absolute-rate floor; the projection periods ARE 30-yr normals, so this is the
-# correct divisor, not an arbitrary one.
-T_NORM <- 30L
+COEF_CSV  <- "data/forcing_model_coefficients_cum_excess.csv"
+MODEL_RDS <- "data/forcing_model_cum_excess.rds"
 
 # --- Model-error whiskers (absolute-rate figure only) ---------------------------
 # The client-facing absolute-rate figure carries a second uncertainty channel: the
 # forward MODEL's own prediction error at each plotted (median) point, as an 80%
 # error bar. It needs the LIVE fitted model (predictInterval), which the coefficient
-# CSV cannot supply -- 08 now also saves the merMod as .rds. See
-# NOTE_model_error_whiskers_plan.md and explore/x17 (widths sanity check).
-MODEL_RDS <- "data/forcing_model_cum_excess.rds"
-PI_LEVEL  <- 0.80                # 80% bar -> matches the 10-90 ensemble footing
-PI_SEED   <- 20260908L           # predictInterval draws are seeded (reproducible)
+# CSV cannot supply. See NOTE_model_error_whiskers_plan.md and explore/x17.
+PI_LEVEL <- 0.80                # 80% bar -> matches the 10-90 ensemble footing
+PI_SEED  <- 20260908L           # predictInterval draws are seeded (reproducible)
 
 # Colorblind-safe scenario colors: ColorBrewer BrBG dark ends (CVD-safe).
-# RCP4.5 = teal-green (cooler), RCP8.5 = rusty brown (warmer).
+# RCP4.5 = teal-green (cooler), RCP8.5 = rusty brown (warmer). The dynamical track
+# is RCP8.5 only, so its figures use one lane -- unused values drop out.
 SCENARIO_COLORS <- c(RCP45 = "#01665E", RCP85 = "#8C510A")
+SCENARIO_LABELS <- c(RCP45 = "RCP4.5", RCP85 = "RCP8.5")
 OBSERVED_LABEL  <- "Observed"     # discrete x-slot label for the historical anchor
+
+# Ten-reach facet figures: 10 x 7.5 in, a standard 4:3 slide -- explicitly NOT the
+# 13.3 widescreen (plotting_conventions.md, settled 2026-09-08).
+FIG_W <- 10
+FIG_H <- 7.5
+
+with_t_norm <- function(periods) {
+  #' Attach each period's length in years. (pure)
+  #' DUPLICATED from 11 rather than sourced -- sourcing 11 to borrow one helper
+  #' would pull 04c and its config in behind it for no other purpose. The right
+  #' fix is the shared utilities module (NOTE_shared_module_refactor.md); until
+  #' then the duplication is deliberate and recorded so it is not read as drift.
+  #' @param periods tibble(period, y1, y2)
+  #' @return periods + t_norm <int>
+  mutate(periods, t_norm = as.integer(y2 - y1 + 1L))
+}
+
+# --- Reporting periods, one table per track ------------------------------------
+# 12 owns its own binning (it re-bins from the per-year file), so these are NOT
+# 11's PERIODS tables and are not meant to match them: 11's statistical table
+# opens with a 2030s decade, this one with a full 2010-2039 normal.
+
+# Statistical: three 30-year climate normals, the settled grain. Contiguous and
+# sharing no boundary year, so the inclusive between()-join tags each water year
+# to exactly one normal.
+NORMALS_STATISTICAL <- with_t_norm(tribble(
+  ~period,       ~y1,    ~y2,
+  "2010-2039",   2010L,  2039L,
+  "2040-2069",   2040L,  2069L,
+  "2070-2099",   2070L,  2099L
+))
+
+# Dynamical: the two 20-year blocks this track uses for K. Its corrected record is
+# 2011-01-01 -> 2050-11-30, so the normals above do not fit it -- 2070-2099 would
+# be empty and 2040-2069 would hold 11 years.
+NORMALS_DYNAMICAL <- with_t_norm(tribble(
+  ~period,       ~y1,    ~y2,
+  "2011-2030",   2011L,  2030L,
+  "2031-2050",   2031L,  2050L
+))
+
+out_paths <- function(suffix) {
+  #' The seven output paths for one track. (pure)
+  #' One naming rule in one place, so a track cannot half-overwrite another's
+  #' products through a mistyped path in a runner.
+  #' @param suffix product/track tag, e.g. "bc-k-by-era-dynamical"
+  #' @return named list of paths
+  list(
+    member      = sprintf("data/migration_dArate_by_member_%s.csv", suffix),
+    summary     = sprintf("data/migration_dArate_summary_%s.csv", suffix),
+    summary_abs = sprintf("data/migration_rate_summary_%s.csv", suffix),
+    plot_delta  = sprintf("plots/migration_trajectory_%s.png", suffix),
+    plot_abs    = sprintf("plots/migration_rate_trajectory_%s.png", suffix),
+    plot_violin = sprintf("plots/migration_dArate_violin_%s.png", suffix),
+    plot_rain   = sprintf("plots/migration_rate_raincloud_%s.png", suffix)
+  )
+}
 
 
 # =============================================================================
-# 2. HELPERS  (pure; each carries its boundary contract. I/O is in section 3.)
+# 2. HELPERS  (pure; each carries its boundary contract. I/O is in section 4.)
 # =============================================================================
 
 coef_value <- function(coef, term_name) {
@@ -124,12 +162,30 @@ select_reach_slopes <- function(coef) {
     transmute(river_segment = as.integer(river_segment), reach_slope = value)
 }
 
+anchor_t_norm <- function(normals) {
+  #' The window length the OBSERVED anchor is annualized over. (pure)
+  #' The anchor is one point per reach, so it needs one t_norm. Every period table
+  #' in use is uniform in t_norm (statistical 30/30/30, dynamical 20/20), so this
+  #' is well defined. It ERRORS on a mixed-length table rather than picking: which
+  #' window a single historical point should be annualized over is a decision, not
+  #' a default.
+  #' @param normals tibble(period, y1, y2, t_norm)
+  #' @return single integer
+  t <- unique(normals$t_norm)
+  if (length(t) != 1L) {
+    stop(sprintf(paste("period table has mixed lengths (%s yr): the observed",
+                       "anchor needs one t_norm -- decide which before running."),
+                 paste(sort(t), collapse = ", ")))
+  }
+  t
+}
+
 select_reach_floors <- function(coef, t_norm) {
   #' Per-reach baseline annual rate (the absolute-rate floor): the shared
   #' flood-independent background rate plus the reach's per-interval intercept
-  #' annualized over the normal length.
+  #' annualized over the period length.
   #' @param coef model-coefficient table.
-  #' @param t_norm normal length in years (reach_intercept is per-interval).
+  #' @param t_norm period length in years (reach_intercept is per-interval).
   #' @return tibble(river_segment <int>, floor_reach <dbl>) in ft/yr.
   baseline <- coef_value(coef, "baseline_per_year")
   coef %>%
@@ -151,23 +207,23 @@ historical_anchor <- function(annual) {
     pull(F)
 }
 
-bin_forcing_to_normals <- function(annual, normals, downscalings) {
-  #' Re-bin per-water-year future forcing to each 30-year normal and reduce to a
+bin_forcing_to_normals <- function(annual, normals) {
+  #' Re-bin per-water-year future forcing to each reporting period and reduce to a
   #' per member x period mean annual cum_excess (F_period).
-  #' @param annual per member x water-year forcing (from 11).
-  #' @param normals tibble(period, y1, y2) defining the 30-yr windows.
-  #' @param downscalings character vector of downscalings to keep (constant-set
-  #'   trajectory ensemble).
-  #' @return tibble(member_id, scenario, downscaling, hydro, period, F_period).
-  #' Decision: step 12 owns the binning, so drop any stale `period` carried in
-  #' from 11 (its old bins) before the join -- otherwise dplyr disambiguates the
-  #' two `period` columns to period.x/period.y and downstream code breaks.
+  #' The forcing table holds ONE track (11b / 11c wrote it from one manifest), so
+  #' no downscaling filter is applied here -- that selection moved upstream.
+  #' @param annual per member x water-year forcing (from 11b / 11c).
+  #' @param normals tibble(period, y1, y2, t_norm).
+  #' @return tibble(member_id, scenario, downscaling, hydro, period, t_norm, F_period).
+  #' Decision: step 12 owns the binning, so drop any `period` / `t_norm` carried in
+  #' from 11 (its own bins) before the join -- otherwise dplyr disambiguates the
+  #' duplicated columns to .x/.y and downstream code breaks.
   annual %>%
-    filter(source == "future", downscaling %in% downscalings) %>%
-    select(-any_of("period")) %>%
+    filter(source == "future") %>%
+    select(-any_of(c("period", "t_norm"))) %>%
     left_join(normals, by = join_by(between(water_year, y1, y2))) %>%
     filter(!is.na(period)) %>%
-    group_by(member_id, scenario, downscaling, hydro, period) %>%
+    group_by(member_id, scenario, downscaling, hydro, period, t_norm) %>%
     summarise(F_period = mean(cum_excess), .groups = "drop")
 }
 
@@ -175,7 +231,8 @@ apply_frozen_slopes <- function(member_period_forcing, reach_slopes, f_hist) {
   #' Apply the frozen reach slopes to each member x period forcing -> delta migration
   #' rate. Every reach is paired with every member x period (a cross join), then
   #' the fit-once slope is applied per period. The intercept + baseline cancel in
-  #' the delta, so only the reach slope and the forcing change enter.
+  #' the delta, so only the reach slope and the forcing change enter -- and the
+  #' delta view is therefore indifferent to t_norm.
   #' @param member_period_forcing tibble from bin_forcing_to_normals().
   #' @param reach_slopes tibble(river_segment, reach_slope) from select_reach_slopes().
   #' @param f_hist historical anchor forcing (scalar, from historical_anchor()).
@@ -231,10 +288,9 @@ build_trajectory <- function(band, normals, hist_rate = NULL) {
   #' @param band tibble from summarise_ensemble_band().
   #' @param normals tibble(period, ...) supplying the ordered period labels.
   #' @param hist_rate NULL for the delta view (historical = 0), or a
-  #'   tibble(river_segment, hist_rate_ft_yr) for the absolute view (historical =
-  #'   each reach's modeled rate at F_hist, with no ensemble spread).
+  #'   tibble(river_segment, hist_rate_ft_yr) for the absolute view.
   #' @return band + one historical row per reach x scenario, `period` a factor
-  #'   ordered historical -> latest normal.
+  #'   ordered historical -> latest period.
   period_levels <- c("historical", normals$period)
 
   anchor <- distinct(band, river_segment, scenario)
@@ -246,7 +302,7 @@ build_trajectory <- function(band, normals, hist_rate = NULL) {
       rename(value = hist_rate_ft_yr)
   }
   # Historical is a single modeled point (or zero) -- no member spread, so the
-  # band pinches to the line there and fans out over the future normals.
+  # band pinches to the line there and fans out over the future periods.
   anchor <- anchor %>%
     transmute(river_segment, scenario, period = "historical",
               members = NA_integer_, median = value, p10 = value, p90 = value)
@@ -257,7 +313,7 @@ build_trajectory <- function(band, normals, hist_rate = NULL) {
 }
 
 plot_trajectory <- function(traj, y_lab, plot_title, plot_subtitle, y_by = 10) {
-  #' Migration-rate trajectory by climate normal, one panel per reach, RCP as
+  #' Migration-rate trajectory by reporting period, one panel per reach, RCP as
   #' color, 10-90% ensemble band as ribbon. (Delta view; the absolute view uses
   #' plot_rate_trajectory() below.)
   #' @param traj tibble from build_trajectory().
@@ -275,25 +331,23 @@ plot_trajectory <- function(traj, y_lab, plot_title, plot_subtitle, y_by = 10) {
     geom_ribbon(aes(ymin = p10, ymax = p90), alpha = 0.18, color = NA) +
     geom_line(linewidth = 0.8) +
     geom_point(size = 1.6) +
-    facet_wrap(~ river_segment, nrow = 2,                          # 2x5 landscape -> fits a standard 4:3 slide
-               labeller = as_labeller(\(x) paste0("RS", x))) +     # fixed scales -> comparable; strips read "RS30"
-    scale_color_manual(values = c(RCP45 = "#01665E", RCP85 = "#8C510A"),
+    facet_wrap(~ river_segment, nrow = 2,                          # 2x5 landscape
+               labeller = as_labeller(\(x) paste0("RS", x))) +     # strips read "RS30"
+    scale_color_manual(values = SCENARIO_COLORS, labels = SCENARIO_LABELS,
                        aesthetics = c("color", "fill")) +
     scale_y_continuous(breaks = seq(y_bot, y_top, by = y_by)) +
-    coord_cartesian(ylim = c(y_bot, y_top)) +                      # clip-safe: limits enclose all data
+    coord_cartesian(ylim = c(y_bot, y_top)) +                      # clip-safe
     labs(x = NULL, y = y_lab, color = NULL, fill = NULL,
          title = plot_title, subtitle = plot_subtitle) +
     theme_minimal(base_size = 10) +
     theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "top")
 }
 
-
 plot_ensemble_violin <- function(member_rate, value, y_lab, plot_title, plot_subtitle,
                                  y_by = 10) {
   #' Full ensemble DISTRIBUTION per reach x period -- the "grid, not a crowd" view
-  #' that the median+band trajectory summarises. Two violins per period (one per
-  #' RCP), the member cloud overlaid as points, and the median marked; faceted by
-  #' reach. Shows skew and tails the ribbon hides.
+  #' that the median+band trajectory summarises. Violins per period x RCP, the
+  #' member cloud overlaid as points, and the median marked; faceted by reach.
   #' @param member_rate per member x reach x period rate table (future periods only).
   #' @param value <data-masking> rate column to show (d_rate_ft_yr or abs_rate_ft_yr).
   #' @param y_lab,plot_title,plot_subtitle labels.
@@ -315,10 +369,10 @@ plot_ensemble_violin <- function(member_rate, value, y_lab, plot_title, plot_sub
                  position = dodge, width = 0.55, linewidth = 0.35, color = "grey15") +
     facet_wrap(~ river_segment, nrow = 2,
                labeller = as_labeller(\(x) paste0("RS", x))) +
-    scale_color_manual(values = c(RCP45 = "#01665E", RCP85 = "#8C510A"),
+    scale_color_manual(values = SCENARIO_COLORS, labels = SCENARIO_LABELS,
                        aesthetics = c("color", "fill")) +
     scale_y_continuous(breaks = seq(y_bot, y_top, by = y_by)) +
-    coord_cartesian(ylim = c(y_bot, y_top)) +                      # display-clip only; violins use full data
+    coord_cartesian(ylim = c(y_bot, y_top)) +                      # display-clip only
     labs(x = NULL, y = y_lab, color = NULL, fill = NULL,
          title = plot_title, subtitle = plot_subtitle) +
     theme_minimal(base_size = 10) +
@@ -326,127 +380,42 @@ plot_ensemble_violin <- function(member_rate, value, y_lab, plot_title, plot_sub
 }
 
 
-build_interval <- function(member_rate, whiskers, period_levels) {
-  #' Purpose : One row per reach x scenario x period -- the ensemble median and
-  #'   its 80% model-prediction-error bounds -- the raincloud's interval channel.
-  #' Inputs  : member_rate (abs_rate_ft_yr per member x reach x period); whiskers
-  #'   (whisker_half_widths() output, model-error half-widths in ft/yr);
-  #'   period_levels (character, for factor ordering of period).
-  #' Output  : tibble(river_segment, scenario, period<fct>, med, ymin, ymax).
-  #' Decision: median(members) == rate at median forcing (rate is linear in
-  #'   forcing), so the interval anchors exactly on the ensemble median.
-  member_rate %>%
-    group_by(river_segment, scenario, period) %>%
-    summarise(med = median(abs_rate_ft_yr), .groups = "drop") %>%
-    mutate(.rs = as.character(river_segment)) %>%
-    inner_join(whiskers %>%
-                 mutate(.rs = as.character(river_segment)) %>%
-                 select(.rs, scenario, period, whisker_half),
-               by = c(".rs", "scenario", "period")) %>%
-    mutate(period = factor(period, levels = period_levels),
-           ymin   = med - whisker_half,
-           ymax   = med + whisker_half) %>%
-    select(-.rs)
-}
-
-plot_raincloud <- function(member_rate, whiskers, normals, y_lab, plot_title,
-                           plot_subtitle, y_by = 10,
-                           dodge_w = 0.75, slab_scale = 0.55, dots_scale = 0.6) {
-  #' Purpose : Absolute-rate ensemble distribution per reach x period as a
-  #'   raincloud -- the "grid, not a crowd" companion to plot_rate_trajectory(),
-  #'   with the model-error interval moved OFF the data so nothing is occluded.
-  #'   Per reach x period x RCP lane, left to right: rain (individual projections,
-  #'   stat_dots) -> interval (median + 80% model prediction error) -> cloud
-  #'   (half-violin density, stat_slab). Two RCP lanes per period, dodged.
-  #' Inputs  : member_rate (abs_rate_ft_yr per member x reach x period, with
-  #'   scenario + period); whiskers (whisker_half_widths() output); normals
-  #'   (tibble(period, ...) giving period order); labels; y_by tick interval;
-  #'   dodge_w/slab_scale/dots_scale layout knobs.
-  #' Output  : a ggplot (caller does ggsave -- I/O at the boundary).
-  #' Decisions: interval is plain geom_linerange + point on PRECOMPUTED model
-  #'   error, NOT a ggdist interval stat (those summarise the members -- a
-  #'   different, which-future quantity). slab normalize = "groups" == equal max
-  #'   width per cell (the settled scale = "width" convention). dots
-  #'   overflow = "compress" keeps ~80 dots inside the narrow facet.
-  period_levels <- normals$period
-  member_rate   <- mutate(member_rate, period = factor(period, levels = period_levels))
-  cell          <- build_interval(member_rate, whiskers, period_levels)
-  dodge         <- position_dodge(width = dodge_w)
-
-  vals  <- member_rate$abs_rate_ft_yr
-  y_top <- ceiling(max(c(vals, cell$ymax), na.rm = TRUE) / y_by) * y_by
-  y_bot <- min(0, floor(min(c(vals, cell$ymin), na.rm = TRUE) / y_by) * y_by)
-
-  ggplot(member_rate, aes(period, abs_rate_ft_yr, fill = scenario, color = scenario)) +
-    # cloud: half-violin density, opening right; equal max width per cell
-    stat_slab(side = "right", scale = slab_scale, normalize = "groups",
-              position = dodge, alpha = 0.35, linewidth = 0.25) +
-    # rain: one dot per projection, piling left; compressed to stay in the facet
-    stat_dots(side = "left", scale = dots_scale, position = dodge,
-              binwidth = NA, overflow = "compress",
-              color = NA, alpha = 0.55) +
-    # interval: ensemble median + 80% model prediction error (thin, capless),
-    # dodged onto each RCP lane's spine. inherit.aes = FALSE: cell has no
-    # abs_rate_ft_yr, so map its aesthetics explicitly.
-    geom_linerange(data = cell, inherit.aes = FALSE,
-                   aes(x = period, ymin = ymin, ymax = ymax,
-                       color = scenario, group = scenario),
-                   position = dodge, linewidth = 0.55) +
-    geom_point(data = cell, inherit.aes = FALSE,
-               aes(x = period, y = med, fill = scenario, group = scenario),
-               position = dodge, shape = 21, color = "grey20",
-               size = 1.6, stroke = 0.3) +
-    facet_wrap(~ river_segment, nrow = 2,
-               labeller = as_labeller(\(x) paste0("RS", x))) +
-    scale_fill_manual(values = SCENARIO_COLORS,
-                      labels = c(RCP45 = "RCP4.5", RCP85 = "RCP8.5"), name = NULL) +
-    scale_color_manual(values = SCENARIO_COLORS,
-                       labels = c(RCP45 = "RCP4.5", RCP85 = "RCP8.5"), name = NULL,
-                       guide = "none") +
-    scale_y_continuous(breaks = seq(y_bot, y_top, by = y_by)) +
-    coord_cartesian(ylim = c(y_bot, y_top)) +
-    labs(x = NULL, y = y_lab, title = plot_title, subtitle = plot_subtitle) +
-    theme_minimal(base_size = 10) +
-    theme(axis.text.x = element_text(angle = 30, hjust = 1),
-          legend.position = "top",
-          panel.grid.minor = element_blank(),
-          plot.title = element_text(size = 12),
-          plot.subtitle = element_text(size = 8, lineheight = 1.15))
-}
-
-
 # --- Model-error whiskers: helpers (pure) ---------------------------------------
 
 median_forcing_by_cell <- function(member_period_forcing) {
-  #' Median annual cum_excess per scenario x period across trajectory members.
-  #' Forcing is period-level (reach-independent), so the plotted median rate
-  #' corresponds to this median forcing -- the anchor for the median point's OWN
-  #' model-error width (option a: the point's error, not a per-member composite).
+  #' Median annual cum_excess per scenario x period across members, with the
+  #' period's t_norm carried. Forcing is period-level (reach-independent), so the
+  #' plotted median rate corresponds to this median forcing -- the anchor for the
+  #' median point's OWN model-error width (option a: the point's error, not a
+  #' per-member composite).
   #' @param member_period_forcing tibble from bin_forcing_to_normals().
-  #' @return tibble(scenario, period, f_annual_median) in cfs-days/yr.
+  #' @return tibble(scenario, period, t_norm, f_annual_median) in cfs-days/yr.
   member_period_forcing %>%
-    group_by(scenario, period) %>%
+    group_by(scenario, period, t_norm) %>%
     summarise(f_annual_median = median(F_period), .groups = "drop")
 }
 
-build_whisker_design <- function(forcing_cells, f_hist, reach_levels, t_norm) {
+build_whisker_design <- function(forcing_cells, f_hist, reach_levels, anchor_yr,
+                                 scenarios) {
   #' One predictInterval design row per reach x {future cell, observed anchor}.
   #' Forcing is placed on the model's interval-total scale (cum_excess_k =
-  #' t_norm * annual / 1000, interval_years = t_norm), and every `interval` label
-  #' is a fresh, never-fitted level so predictInterval(new.levels="draw") injects
-  #' the period variance. The observed anchor is a modeled point too, so it also
-  #' draws an interval effect; emitted per scenario (identical value) to key onto
-  #' the per-scenario trajectory rows.
-  #' @param forcing_cells tibble(scenario, period, f_annual_median).
+  #' t_norm * annual / 1000, interval_years = t_norm) using EACH PERIOD'S OWN
+  #' t_norm, and every `interval` label is a fresh, never-fitted level so
+  #' predictInterval(new.levels="draw") injects the period variance. The observed
+  #' anchor is a modeled point too, so it also draws an interval effect; it is
+  #' emitted per scenario (identical value) to key onto the per-scenario
+  #' trajectory rows, and takes the track's anchor t_norm.
+  #' @param forcing_cells tibble(scenario, period, t_norm, f_annual_median).
   #' @param f_hist observed-record mean annual forcing (scalar).
   #' @param reach_levels model's river_segment factor levels (character).
-  #' @param t_norm normal length (yr).
+  #' @param anchor_yr window length for the observed anchor (from anchor_t_norm()).
+  #' @param scenarios scenarios present on this track.
   #' @return tibble(river_segment<fct>, interval<fct>, cum_excess_k, interval_years,
   #'   scenario, period).
   future_cells <- forcing_cells %>%
-    transmute(scenario, period, f_annual = f_annual_median)
-  obs_cells <- tibble(scenario = names(SCENARIO_COLORS),
-                      period = "historical", f_annual = f_hist)
+    transmute(scenario, period, t_norm, f_annual = f_annual_median)
+  obs_cells <- tibble(scenario = scenarios, period = "historical",
+                      t_norm = anchor_yr, f_annual = f_hist)
   bind_rows(future_cells, obs_cells) %>%
     tidyr::crossing(river_segment = reach_levels) %>%
     mutate(
@@ -495,15 +464,94 @@ attach_whiskers <- function(traj, whiskers) {
     mutate(ymin = median - whisker_half, ymax = median + whisker_half)
 }
 
+build_interval <- function(member_rate, whiskers, period_levels) {
+  #' Purpose : One row per reach x scenario x period -- the ensemble median and
+  #'   its 80% model-prediction-error bounds -- the raincloud's interval channel.
+  #' Inputs  : member_rate (abs_rate_ft_yr per member x reach x period); whiskers
+  #'   (whisker_half_widths() output); period_levels (for factor ordering).
+  #' Output  : tibble(river_segment, scenario, period<fct>, med, ymin, ymax).
+  #' Decision: median(members) == rate at median forcing (rate is linear in
+  #'   forcing), so the interval anchors exactly on the ensemble median.
+  member_rate %>%
+    group_by(river_segment, scenario, period) %>%
+    summarise(med = median(abs_rate_ft_yr), .groups = "drop") %>%
+    mutate(.rs = as.character(river_segment)) %>%
+    inner_join(whiskers %>%
+                 mutate(.rs = as.character(river_segment)) %>%
+                 select(.rs, scenario, period, whisker_half),
+               by = c(".rs", "scenario", "period")) %>%
+    mutate(period = factor(period, levels = period_levels),
+           ymin   = med - whisker_half,
+           ymax   = med + whisker_half) %>%
+    select(-.rs)
+}
+
+plot_raincloud <- function(member_rate, whiskers, normals, y_lab, plot_title,
+                           plot_subtitle, y_by = 10,
+                           dodge_w = 0.75, slab_scale = 0.55, dots_scale = 0.6) {
+  #' Purpose : Absolute-rate ensemble distribution per reach x period as a
+  #'   raincloud -- the "grid, not a crowd" companion to plot_rate_trajectory(),
+  #'   with the model-error interval moved OFF the data so nothing is occluded.
+  #'   Per reach x period x RCP lane, left to right: rain (individual projections,
+  #'   stat_dots) -> interval (median + 80% model prediction error) -> cloud
+  #'   (half-violin density, stat_slab).
+  #' Inputs  : member_rate; whiskers; normals (period order); labels; layout knobs.
+  #' Output  : a ggplot (caller does ggsave -- I/O at the boundary).
+  #' Decisions: interval is plain geom_linerange + point on PRECOMPUTED model
+  #'   error, NOT a ggdist interval stat (those summarise the members -- a
+  #'   different, which-future quantity). slab normalize = "groups" == equal max
+  #'   width per cell. dots overflow = "compress" keeps the dots inside the facet.
+  period_levels <- normals$period
+  member_rate   <- mutate(member_rate, period = factor(period, levels = period_levels))
+  cell          <- build_interval(member_rate, whiskers, period_levels)
+  dodge         <- position_dodge(width = dodge_w)
+
+  vals  <- member_rate$abs_rate_ft_yr
+  y_top <- ceiling(max(c(vals, cell$ymax), na.rm = TRUE) / y_by) * y_by
+  y_bot <- min(0, floor(min(c(vals, cell$ymin), na.rm = TRUE) / y_by) * y_by)
+
+  ggplot(member_rate, aes(period, abs_rate_ft_yr, fill = scenario, color = scenario)) +
+    # cloud: half-violin density, opening right; equal max width per cell
+    stat_slab(side = "right", scale = slab_scale, normalize = "groups",
+              position = dodge, alpha = 0.35, linewidth = 0.25) +
+    # rain: one dot per projection, piling left; compressed to stay in the facet
+    stat_dots(side = "left", scale = dots_scale, position = dodge,
+              binwidth = NA, overflow = "compress",
+              color = NA, alpha = 0.55) +
+    # interval: ensemble median + 80% model prediction error (thin, capless).
+    # inherit.aes = FALSE: cell has no abs_rate_ft_yr, so map explicitly.
+    geom_linerange(data = cell, inherit.aes = FALSE,
+                   aes(x = period, ymin = ymin, ymax = ymax,
+                       color = scenario, group = scenario),
+                   position = dodge, linewidth = 0.55) +
+    geom_point(data = cell, inherit.aes = FALSE,
+               aes(x = period, y = med, fill = scenario, group = scenario),
+               position = dodge, shape = 21, color = "grey20",
+               size = 1.6, stroke = 0.3) +
+    facet_wrap(~ river_segment, nrow = 2,
+               labeller = as_labeller(\(x) paste0("RS", x))) +
+    scale_fill_manual(values = SCENARIO_COLORS, labels = SCENARIO_LABELS, name = NULL) +
+    scale_color_manual(values = SCENARIO_COLORS, labels = SCENARIO_LABELS, name = NULL,
+                       guide = "none") +
+    scale_y_continuous(breaks = seq(y_bot, y_top, by = y_by)) +
+    coord_cartesian(ylim = c(y_bot, y_top)) +
+    labs(x = NULL, y = y_lab, title = plot_title, subtitle = plot_subtitle) +
+    theme_minimal(base_size = 10) +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "top",
+          panel.grid.minor = element_blank(),
+          plot.title = element_text(size = 12),
+          plot.subtitle = element_text(size = 8, lineheight = 1.15))
+}
+
 plot_rate_trajectory <- function(traj, normals, y_lab, plot_title, plot_subtitle,
                                  y_by = 10) {
   #' Absolute migration-rate trajectory as a DISCRETE series of period solutions
-  #' (Byron 2026-09-08): a categorical x of labeled slots (Observed + the three
-  #' normals), each point centered in its slot, slots separated by light vertical
-  #' dividers, and a DASHED connector that reads as a trend aid, not a fitted
-  #' curve. Two channels: the 10-90 ensemble band (which-future) as a translucent
-  #' ribbon, and the 80% model-error whisker (how well-pinned each point is) as an
-  #' error bar. RCP as CVD-safe BrBG color.
+  #' (Byron 2026-09-08): a categorical x of labeled slots (Observed + the periods),
+  #' each point centered in its slot, slots separated by light vertical dividers,
+  #' and a DASHED connector that reads as a trend aid, not a fitted curve. Two
+  #' channels: the 10-90 ensemble band (which-future) as a translucent ribbon, and
+  #' the 80% model-error whisker (how well-pinned each point is) as an error bar.
   #' @param traj tibble from attach_whiskers() (median, ymin, ymax, p10, p90).
   #' @param normals tibble(period, ...) supplying future slot order.
   #' @param y_lab,plot_title,plot_subtitle labels.
@@ -521,13 +569,14 @@ plot_rate_trajectory <- function(traj, normals, y_lab, plot_title, plot_subtitle
     geom_vline(xintercept = seq(0.5, length(slot_levels) + 0.5, by = 1),
                color = "grey85", linewidth = 0.3) +               # slot dividers
     geom_ribbon(aes(ymin = p10, ymax = p90), alpha = 0.15, color = NA) +
-    geom_line(linewidth = 0.7, linetype = "dashed", position = dodge) +  # trend aid, not a curve
+    geom_line(linewidth = 0.7, linetype = "dashed", position = dodge) +  # trend aid
     geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.18,
                   linewidth = 0.5, position = dodge) +
     geom_point(size = 1.7, position = dodge) +
     facet_wrap(~ river_segment, nrow = 2,
                labeller = as_labeller(\(x) paste0("RS", x))) +
-    scale_color_manual(values = SCENARIO_COLORS, aesthetics = c("color", "fill")) +
+    scale_color_manual(values = SCENARIO_COLORS, labels = SCENARIO_LABELS,
+                       aesthetics = c("color", "fill")) +
     scale_y_continuous(breaks = seq(y_bot, y_top, by = y_by)) +
     coord_cartesian(ylim = c(y_bot, y_top)) +
     labs(x = NULL, y = y_lab, color = NULL, fill = NULL,
@@ -541,98 +590,118 @@ plot_rate_trajectory <- function(traj, normals, y_lab, plot_title, plot_subtitle
 
 
 # =============================================================================
-# 3. ORCHESTRATION  (validate + read inputs, apply the model, write outputs)
+# 3. SUBTITLE TEXT  (built from the run, not hardcoded to one track)
 # =============================================================================
 
-# Validation at the boundary -- helpers below trust their inputs.
-stopifnot(file.exists(ANNUAL_CSV), file.exists(COEF_CSV), file.exists(MODEL_RDS))
+ensemble_phrase <- function(member_period_forcing, track_label) {
+  #' "160 statistical members" / "12 dynamical members, RCP8.5 only" -- counted
+  #' from the data rather than written into a string, which is how the old
+  #' hardcoded "160 statistical members" survived into runs it did not describe.
+  #' @return single character
+  n   <- n_distinct(member_period_forcing$member_id)
+  rcp <- sort(unique(member_period_forcing$scenario))
+  sprintf("%d %s members (%s)", n, track_label,
+          paste(SCENARIO_LABELS[rcp], collapse = " / "))
+}
 
-annual       <- read_csv(ANNUAL_CSV, show_col_types = FALSE)
-coef         <- read_csv(COEF_CSV,   show_col_types = FALSE)
-reach_slopes <- select_reach_slopes(coef)
-reach_floors <- select_reach_floors(coef, T_NORM)
-f_hist       <- historical_anchor(annual)
-stopifnot(is.finite(f_hist), nrow(reach_slopes) > 0, nrow(reach_floors) > 0)
 
-member_period_forcing <- bin_forcing_to_normals(annual, NORMALS, TRAJECTORY_DOWNSCALINGS)
+# =============================================================================
+# 4. ORCHESTRATION  (validate + read inputs, apply the model, write outputs)
+# =============================================================================
 
-# delta view (change vs historical) and absolute view (historical rate + delta).
-d_rate       <- apply_frozen_slopes(member_period_forcing, reach_slopes, f_hist)
-reach_hist   <- reach_historical_rates(reach_floors, reach_slopes, f_hist)
-abs_member   <- add_absolute_rate(d_rate, reach_hist)
+run_migration_projection <- function(annual_csv, normals, suffix, track_label,
+                                     coef_csv = COEF_CSV, model_rds = MODEL_RDS) {
+  #' Project migration for ONE track: read its forcing table, apply the frozen
+  #' model, write three CSVs and four figures.
+  #' @param annual_csv per-year forcing table from 11b / 11c (one track).
+  #' @param normals tibble(period, y1, y2, t_norm) -- this track's reporting periods.
+  #' @param suffix product/track tag for the output names.
+  #' @param track_label "statistical" / "dynamical", for figure subtitles.
+  #' @return list(member_rate, delta_band, abs_band, whiskers), invisibly.
+  stopifnot(file.exists(annual_csv), file.exists(coef_csv), file.exists(model_rds),
+            all(c("period", "y1", "y2", "t_norm") %in% names(normals)))
+  out <- out_paths(suffix)
 
-delta_band <- summarise_ensemble_band(d_rate,     d_rate_ft_yr)
-abs_band   <- summarise_ensemble_band(abs_member, abs_rate_ft_yr)
+  annual       <- read_csv(annual_csv, show_col_types = FALSE)
+  coef         <- read_csv(coef_csv,   show_col_types = FALSE)
+  reach_slopes <- select_reach_slopes(coef)
+  f_hist       <- historical_anchor(annual)
+  anchor_yr    <- anchor_t_norm(normals)
+  reach_floors <- select_reach_floors(coef, anchor_yr)
+  stopifnot(is.finite(f_hist), nrow(reach_slopes) > 0, nrow(reach_floors) > 0)
 
-write_csv(d_rate,     OUT_MEMBER)
-write_csv(delta_band, OUT_SUMMARY)
-write_csv(abs_band,   OUT_SUMMARY_ABS)
+  member_period_forcing <- bin_forcing_to_normals(annual, normals)
+  stopifnot(nrow(member_period_forcing) > 0)
+  scenarios <- sort(unique(member_period_forcing$scenario))
 
-cat("\n=== delta migration rate (ft/yr) vs historical, ensemble median [p10, p90] ===\n")
-cat(sprintf("(historical anchor F_hist = %s cfs-days/yr; %d statistical members)\n",
-            format(round(f_hist), big.mark = ","),
-            n_distinct(member_period_forcing$member_id)))
-delta_band %>%
-  mutate(across(c(median, p10, p90), ~ round(.x, 2))) %>%
-  arrange(river_segment, scenario, period) %>%
-  as.data.frame() %>% print(row.names = FALSE)
+  # delta view (change vs historical) and absolute view (historical rate + delta).
+  d_rate     <- apply_frozen_slopes(member_period_forcing, reach_slopes, f_hist)
+  reach_hist <- reach_historical_rates(reach_floors, reach_slopes, f_hist)
+  abs_member <- add_absolute_rate(d_rate, reach_hist)
 
-cat("\n=== Absolute migration rate (ft/yr), historical baseline per reach ===\n")
-reach_hist %>%
-  mutate(hist_rate_ft_yr = round(hist_rate_ft_yr, 2)) %>%
-  arrange(river_segment) %>%
-  as.data.frame() %>% print(row.names = FALSE)
+  delta_band <- summarise_ensemble_band(d_rate,     d_rate_ft_yr)
+  abs_band   <- summarise_ensemble_band(abs_member, abs_rate_ft_yr)
 
-delta_traj <- build_trajectory(delta_band, NORMALS)
-abs_traj   <- build_trajectory(abs_band,   NORMALS, hist_rate = reach_hist)
+  write_csv(d_rate,     out$member)
+  write_csv(delta_band, out$summary)
+  write_csv(abs_band,   out$summary_abs)
 
-# Model-error whiskers for the absolute-rate figure: 80% prediction-error half-
-# width at each cell's MEDIAN forcing (the plotted point's own error), from the
-# live fitted model. See NOTE_model_error_whiskers_plan.md and explore/x17.
-model         <- read_rds(MODEL_RDS)
-forcing_cells <- median_forcing_by_cell(member_period_forcing)
-reach_levels  <- levels(model.frame(model)$river_segment)
-whisk_design  <- build_whisker_design(forcing_cells, f_hist, reach_levels, T_NORM)
-whiskers      <- whisker_half_widths(model, whisk_design, PI_LEVEL, PI_SEED)
-abs_traj_w    <- attach_whiskers(abs_traj, whiskers)
+  # Model-error whiskers: 80% prediction-error half-width at each cell's MEDIAN
+  # forcing (the plotted point's own error), from the live fitted model.
+  model         <- read_rds(model_rds)
+  forcing_cells <- median_forcing_by_cell(member_period_forcing)
+  reach_levels  <- levels(model.frame(model)$river_segment)
+  whisk_design  <- build_whisker_design(forcing_cells, f_hist, reach_levels,
+                                        anchor_yr, scenarios)
+  whiskers      <- whisker_half_widths(model, whisk_design, PI_LEVEL, PI_SEED)
 
-ggsave(OUT_PLOT, plot_trajectory(
-  delta_traj,
-  y_lab        = "Change in migration rate vs historical (ft/yr)",
-  plot_title   = "Projected change in channel migration rate by climate normal",
-  plot_subtitle = "Median + 10-90% ensemble band, 160 statistical members. Reaches RS28-37."),
-  width = 13, height = 7.5, units = "in")
+  delta_traj <- build_trajectory(delta_band, normals)
+  abs_traj   <- build_trajectory(abs_band,   normals, hist_rate = reach_hist)
+  abs_traj_w <- attach_whiskers(abs_traj, whiskers)
 
-ggsave(OUT_PLOT_ABS, plot_rate_trajectory(
-  abs_traj_w, NORMALS,
-  y_lab        = "Migration rate (ft/yr)",
-  plot_title   = "Projected channel migration rate by climate normal (modeled)",
-  plot_subtitle = paste(
-    "Points = modeled median migration rate.  Bars = the model's 80% prediction interval: the 8-in-10 range for an actual measured rate at that forcing",
-    "(fitted-coefficient, reach, unmeasured-period, and mapping error combined).  Band = 10-90% spread across the 160 climate futures (which-future uncertainty).",
-    "Observed = modeled rate at the historical forcing.  RCP4.5 / RCP8.5 shown separately.  Reaches RS28-37.",
-    sep = "\n")),
-  width = 13, height = 7.5, units = "in")
+  ens <- ensemble_phrase(member_period_forcing, track_label)
 
-ggsave(OUT_PLOT_VIOLIN, plot_ensemble_violin(
-  d_rate,
-  value        = d_rate_ft_yr,
-  y_lab        = "Change in migration rate vs historical (ft/yr)",
-  plot_title   = "Projected change in channel migration rate -- full ensemble distribution",
-  plot_subtitle = "Violin = member spread per climate normal, split by RCP (80 each); points = members, bar = median. Reaches RS28-37."),
-  width = 13, height = 7.5, units = "in")
+  ggsave(out$plot_delta, plot_trajectory(
+    delta_traj,
+    y_lab         = "Change in migration rate vs historical (ft/yr)",
+    plot_title    = "Projected change in channel migration rate by period",
+    plot_subtitle = sprintf("Median + 10-90%% ensemble band, %s. Reaches RS28-37.", ens)),
+    width = FIG_W, height = FIG_H, units = "in")
 
-# Raincloud view of the absolute rate (10 x 7.5 per the ten-reach facet
-# convention in claude/plotting_conventions.md).
-ggsave(OUT_PLOT_RAINCLOUD, plot_raincloud(
-  abs_member, whiskers, NORMALS,
-  y_lab        = "Migration rate (ft/yr)",
-  plot_title   = "Projected channel migration rate -- full ensemble distribution (modeled)",
-  plot_subtitle = paste(
-    "Shaded area = spread across ~80 modeled future-flow projections per RCP (which-future uncertainty).",
-    "Dots = the individual projections; Point  = ensemble median; vertical line = 80% model prediction error. Reaches RS28-37.",
-    sep = "\n")),
-  width = 13, height = 7.5, units = "in")
+  ggsave(out$plot_abs, plot_rate_trajectory(
+    abs_traj_w, normals,
+    y_lab         = "Migration rate (ft/yr)",
+    plot_title    = "Projected channel migration rate by period (modeled)",
+    plot_subtitle = paste(
+      "Points = modeled median migration rate.  Bars = the model's 80% prediction interval: the 8-in-10 range for an actual measured rate at that forcing",
+      "(fitted-coefficient, reach, unmeasured-period, and mapping error combined).  Band = 10-90% spread across the climate futures (which-future uncertainty).",
+      sprintf("Observed = modeled rate at the historical forcing.  %s.  Reaches RS28-37.", ens),
+      sep = "\n")),
+    width = FIG_W, height = FIG_H, units = "in")
 
-cat("\nWrote ", OUT_PLOT, ", ", OUT_PLOT_ABS, ", ", OUT_PLOT_VIOLIN, ", and ",
-    OUT_PLOT_RAINCLOUD, "\n", sep = "")
+  ggsave(out$plot_violin, plot_ensemble_violin(
+    d_rate,
+    value         = d_rate_ft_yr,
+    y_lab         = "Change in migration rate vs historical (ft/yr)",
+    plot_title    = "Projected change in channel migration rate -- full ensemble distribution",
+    plot_subtitle = sprintf(paste("Violin = member spread per period, split by RCP;",
+                                  "points = members, bar = median.  %s.  Reaches RS28-37."), ens)),
+    width = FIG_W, height = FIG_H, units = "in")
+
+  ggsave(out$plot_rain, plot_raincloud(
+    abs_member, whiskers, normals,
+    y_lab         = "Migration rate (ft/yr)",
+    plot_title    = "Projected channel migration rate -- full ensemble distribution (modeled)",
+    plot_subtitle = paste(
+      sprintf("Shaded area = spread across the modeled future-flow projections (which-future uncertainty); %s.", ens),
+      "Dots = the individual projections; point = ensemble median; vertical line = 80% model prediction error. Reaches RS28-37.",
+      sep = "\n")),
+    width = FIG_W, height = FIG_H, units = "in")
+
+  message(sprintf("Wrote 3 CSVs and 4 figures for the %s track (%s)",
+                  track_label, suffix))
+
+  invisible(list(member_rate = abs_member, delta_band = delta_band,
+                 abs_band = abs_band, whiskers = whiskers,
+                 f_hist = f_hist, reach_hist = reach_hist))
+}

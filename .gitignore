@@ -36,3 +36,7 @@ docs/*.html
 .RData
 .Rprofile
 .positai
+
+# Reference material and staging, not part of the analysis chain
+bmorph/
+Claude outputs/

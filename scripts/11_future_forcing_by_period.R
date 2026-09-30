@@ -37,6 +37,7 @@ library(purrr)
 library(tidyr)
 
 source("scripts/04c_interval_forcing_metrics.R")   # add_water_year, compute_all_interval_forcing, cfg, cfg_num
+source("scripts/eras.R")                           # ERAS_STATISTICAL, ERAS_DYNAMICAL, as_period_table()
 
 
 # =============================================================================
@@ -52,41 +53,22 @@ BC_DIR    <- "data/Umatilla_Future_Flows_BC"
 FULL_WATER_YEAR_DAYS <- 365L
 
 
-with_t_norm <- function(periods) {
-  #' Attach each period's length in years. (pure)
-  #' t_norm is the interval length the migration model's per-interval intercept is
-  #' annualized over in 12, and the scale its forcing is placed on for the error
-  #' whiskers. It is a PROPERTY OF THE PERIOD TABLE, not a script-level constant
-  #' (Byron, 2026-09-29), so it is derived here and carried, never hardcoded.
-  #' Nominal, from the table -- not the realized year count, which can be lower
-  #' where a partial water year was dropped.
-  #' @param periods tibble(period, y1, y2)
-  #' @return periods + t_norm <int>
-  mutate(periods, t_norm = as.integer(y2 - y1 + 1L))
-}
-
-# --- Reporting periods, one table per track ------------------------------------
-# NB these are the SUMMARY periods for this step's output. Script 12 re-bins from
-# the per-year file and owns its own table; the two are deliberately separate
-# objects (12's near-term normal starts 2010, this one skips the partial 2020s).
-
-# Statistical (BCSD + MACA), record 2006-2099: a near-term decade + two normals.
-PERIODS_STATISTICAL <- with_t_norm(tribble(
-  ~period,       ~y1,    ~y2,
-  "2030s",       2030L,  2039L,
-  "2040-2069",   2040L,  2069L,
-  "2070-2099",   2070L,  2099L
-))
-
-# Dynamical, record 2011-01-01 -> 2050-11-30: the two 20-year blocks this track
-# already uses for K (ERAS_DYNAMICAL in 10). Not aligned with the statistical
-# table by design -- the dynamical set is its own analytical track (G6), and 30
-# would split 40 years into 30 and 10.
-PERIODS_DYNAMICAL <- with_t_norm(tribble(
-  ~period,       ~y1,    ~y2,
-  "2011-2030",   2011L,  2030L,
-  "2031-2050",   2031L,  2050L
-))
+# --- Reporting periods ---------------------------------------------------------
+# NO TABLE IS DECLARED HERE. The blocks are the bias-correction eras, defined
+# once in scripts/eras.R (Byron, 2026-09-29), and a runner passes the one for its
+# track through as_period_table(), which supplies the `period` column name this
+# step keys on and each block's nominal length in years.
+#
+# What changed and why it matters: this step used to carry its own statistical
+# table opening with a 2030s decade, and 12 carried a third opening with a
+# 2010-2039 normal. Nothing broke, because 12 re-bins from the per-year file --
+# but water years 2006-2029 fell in no period and were silently dropped from this
+# step's summary, and the summary's period labels did not name the same spans as
+# the projection's. Both are gone: the eras cover 2006-2099 with no gap, and one
+# block table now serves correction, forcing and projection alike.
+#
+# with_t_norm() lived here and in 12; as_period_table() in scripts/eras.R
+# replaces both copies.
 
 
 # =============================================================================
@@ -197,6 +179,32 @@ future_annual_forcing <- function(members, periods) {
     tag_period(periods)
 }
 
+fill_flood_free_years <- function(annual) {
+  #' Enter water years that produced no forcing window as zeros. (pure)
+  #' A water year in which no day cleared the 0.75xQ2 floor leaves no rows in
+  #' data/pendleton_daily_extended.rds, so annual_intervals() builds no window
+  #' for it and annual_cum_excess() returns nothing -- the year vanishes rather
+  #' than reporting the zero it is. That silently conditions the historical
+  #' baseline on years that had floods.
+  #' Byron, 2026-09-29: a year with no exceedance is real and belongs in the
+  #' data set. The reconstruction floor sits BELOW Q2, so an absent year is a
+  #' measured zero, not a gap in coverage.
+  #' Interior years only -- the span runs from the first water year with a
+  #' record to the last, so nothing is invented beyond the record's own ends.
+  #' @param annual tibble(water_year, cum_excess, n_days)
+  #' @return annual + one zero row per absent water year, ordered
+  span   <- seq(min(annual$water_year), max(annual$water_year))
+  absent <- setdiff(span, annual$water_year)
+  if (length(absent) > 0) {
+    message(sprintf("  observed: %d flood-free water year(s) entered as zero; %s",
+                    length(absent), paste(sort(absent), collapse = ", ")))
+  }
+  annual %>%
+    bind_rows(tibble(water_year = as.integer(absent),
+                     cum_excess = 0, n_days = 0L)) %>%
+    arrange(water_year)
+}
+
 observed_annual_forcing <- function() {
   #' The observed record through the same per-year pipeline, tagged "historical".
   #' It is the anchor F_hist that 12 measures every period against, and it is the
@@ -206,11 +214,16 @@ observed_annual_forcing <- function() {
   #' from WY1996; before that it holds ONLY the ~280 days 04b reconstructed above
   #' the 0.75xQ2 floor. That floor is the metric threshold, so a pre-1996 water
   #' year with eight rows is complete FOR cum_excess -- every day that could
-  #' contribute is present. Water years with no above-floor day produce no rows
-  #' and do not appear at all. Design, settled 09-03/09-04; do not "repair" it.
+  #' contribute is present. Design, settled 09-03/09-04; do not "repair" it by
+  #' filtering on n_days.
+  #' A year with NO above-floor day is the limiting case of the same design: it
+  #' holds no rows, so it produced no window. fill_flood_free_years() enters it
+  #' as the zero it is (Byron, 2026-09-29), which is why n_days = 0 appears on
+  #' those rows and why F_hist is now a mean over the full span.
   #' @return tibble on the same columns as future_annual_forcing()
   readRDS(cfg("extended_record_rds")) %>%
     annual_cum_excess() %>%
+    fill_flood_free_years() %>%
     mutate(member_id = "observed", gcm = NA_character_, scenario = "observed",
            downscaling = NA_character_, hydro = NA_character_,
            source = "observed", period = "historical", t_norm = NA_integer_)

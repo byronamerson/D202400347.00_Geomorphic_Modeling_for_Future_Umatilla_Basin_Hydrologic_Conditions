@@ -49,7 +49,7 @@ OUT_SUMMARY   <- "data/future_forcing_period_summary_bc-k-by-era.csv"
 out <- run_future_forcing(
   manifest_path = MANIFEST,
   tag           = PRODUCT_TAG,
-  periods       = PERIODS_STATISTICAL,
+  periods       = as_period_table(ERAS_STATISTICAL),
   out_annual    = OUT_ANNUAL,
   out_summary   = OUT_SUMMARY
 )

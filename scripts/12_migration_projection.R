@@ -61,6 +61,9 @@ library(ggplot2)
 library(ggdist)     # stat_slab()/stat_dots() for the raincloud figure
 library(merTools)   # predictInterval() for the model-error whiskers
 
+source("scripts/eras.R")   # ERAS_STATISTICAL, ERAS_DYNAMICAL, OBS_WINDOW_YEARS_*,
+                           # as_period_table()
+
 
 # =============================================================================
 # 1. CONFIGURATION  (track-invariant only; per-track settings are arguments)
@@ -89,43 +92,30 @@ OBSERVED_LABEL  <- "Observed"     # discrete x-slot label for the historical anc
 FIG_W <- 10
 FIG_H <- 7.5
 
-with_t_norm <- function(periods) {
-  #' Attach each period's length in years. (pure)
-  #' DUPLICATED from 11 rather than sourced -- sourcing 11 to borrow one helper
-  #' would pull 04c and its config in behind it for no other purpose. The right
-  #' fix is the shared utilities module (NOTE_shared_module_refactor.md); until
-  #' then the duplication is deliberate and recorded so it is not read as drift.
-  #' @param periods tibble(period, y1, y2)
-  #' @return periods + t_norm <int>
-  mutate(periods, t_norm = as.integer(y2 - y1 + 1L))
-}
-
-# --- Reporting periods, one table per track ------------------------------------
-# 12 owns its own binning (it re-bins from the per-year file), so these are NOT
-# 11's PERIODS tables and are not meant to match them: 11's statistical table
-# opens with a 2030s decade, this one with a full 2010-2039 normal.
-
-# Statistical: three 30-year climate normals, the settled grain. Contiguous and
-# sharing no boundary year, so the inclusive between()-join tags each water year
-# to exactly one normal.
-NORMALS_STATISTICAL <- with_t_norm(tribble(
-  ~period,       ~y1,    ~y2,
-  "2010-2039",   2010L,  2039L,
-  "2040-2069",   2040L,  2069L,
-  "2070-2099",   2070L,  2099L
-))
-
-# Dynamical: the two 20-year blocks this track uses for K. Its corrected record is
-# 2011-01-01 -> 2050-11-30, so the normals above do not fit it -- 2070-2099 would
-# be empty and 2040-2069 would hold 11 years.
-NORMALS_DYNAMICAL <- with_t_norm(tribble(
-  ~period,       ~y1,    ~y2,
-  "2011-2030",   2011L,  2030L,
-  "2031-2050",   2031L,  2050L
-))
+# --- Reporting periods ---------------------------------------------------------
+# NO TABLE IS DECLARED HERE. This step still owns its own binning -- it re-bins
+# from the per-year forcing file rather than trusting the labels carried in it --
+# but the blocks it bins to are now the bias-correction eras, defined once in
+# scripts/eras.R and passed in by a runner through as_period_table().
+#
+# Why (Byron, 2026-09-29): the correction applies one multiplier per era and
+# steps at an era boundary. While this step reported on 30-year normals that did
+# not line up with those eras, two of the three reported periods straddled a step
+# and so held two different corrections. On the shared blocks each reported
+# period carries exactly one.
+#
+# Consequence to expect, arithmetic not hydrology: the statistical blocks are
+# 30/30/34 years rather than three 30s. Block length does NOT enter the plotted
+# rate -- the per-reach floor is built once from the observed-point divisor and
+# added to every block alike -- but it DOES divide the model-error whisker, so
+# the 2066-2099 bars run roughly 12% narrower than the other two purely from the
+# longer window. Narrower there means "spread over more years", not "better
+# pinned down"; say so in the caption if the figure is read closely.
+#
+# with_t_norm() lived here and in 11; as_period_table() replaces both copies.
 
 out_paths <- function(suffix) {
-  #' The seven output paths for one track. (pure)
+  #' The eight output paths for one track. (pure)
   #' One naming rule in one place, so a track cannot half-overwrite another's
   #' products through a mistyped path in a runner.
   #' @param suffix product/track tag, e.g. "bc-k-by-era-dynamical"
@@ -134,6 +124,7 @@ out_paths <- function(suffix) {
     member      = sprintf("data/migration_dArate_by_member_%s.csv", suffix),
     summary     = sprintf("data/migration_dArate_summary_%s.csv", suffix),
     summary_abs = sprintf("data/migration_rate_summary_%s.csv", suffix),
+    whiskers    = sprintf("data/migration_whisker_half_widths_%s.csv", suffix),
     plot_delta  = sprintf("plots/migration_trajectory_%s.png", suffix),
     plot_abs    = sprintf("plots/migration_rate_trajectory_%s.png", suffix),
     plot_violin = sprintf("plots/migration_dArate_violin_%s.png", suffix),
@@ -162,23 +153,13 @@ select_reach_slopes <- function(coef) {
     transmute(river_segment = as.integer(river_segment), reach_slope = value)
 }
 
-anchor_t_norm <- function(normals) {
-  #' The window length the OBSERVED anchor is annualized over. (pure)
-  #' The anchor is one point per reach, so it needs one t_norm. Every period table
-  #' in use is uniform in t_norm (statistical 30/30/30, dynamical 20/20), so this
-  #' is well defined. It ERRORS on a mixed-length table rather than picking: which
-  #' window a single historical point should be annualized over is a decision, not
-  #' a default.
-  #' @param normals tibble(period, y1, y2, t_norm)
-  #' @return single integer
-  t <- unique(normals$t_norm)
-  if (length(t) != 1L) {
-    stop(sprintf(paste("period table has mixed lengths (%s yr): the observed",
-                       "anchor needs one t_norm -- decide which before running."),
-                 paste(sort(t), collapse = ", ")))
-  }
-  t
-}
+# anchor_t_norm() is GONE. It derived the observed point's divisor from the period
+# table and errored on a mixed-length table rather than picking one -- correct
+# while every block in use was the same length. The statistical eras are 30/30/34,
+# so there is no single length to derive and the divisor is now STATED, per track,
+# as OBS_WINDOW_YEARS_STATISTICAL / _DYNAMICAL in scripts/eras.R and passed to
+# run_migration_projection() as obs_window_years. The guard's job is done by the
+# argument being explicit; its reasoning moved to eras.R with the constants.
 
 select_reach_floors <- function(coef, t_norm) {
   #' Per-reach baseline annual rate (the absolute-rate floor): the shared
@@ -197,7 +178,10 @@ select_reach_floors <- function(coef, t_norm) {
 historical_anchor <- function(annual) {
   #' Observed-record mean annual cum_excess -- the historical forcing baseline
   #' F_hist against which every period's change is measured. Carries the 2020
-  #' record flood, so it is an honest (conservative) anchor.
+  #' record flood, so it is an honest (conservative) anchor, and carries
+  #' flood-free water years as zeros (11's fill_flood_free_years(), Byron
+  #' 2026-09-29) -- the mean is over the record's full span, not over its
+  #' flood years only.
   #' @param annual per member x water-year forcing table (from 11), with a
   #'   `source` column tagging "observed" rows.
   #' @return single numeric (cfs-days/yr).
@@ -408,7 +392,8 @@ build_whisker_design <- function(forcing_cells, f_hist, reach_levels, anchor_yr,
   #' @param forcing_cells tibble(scenario, period, t_norm, f_annual_median).
   #' @param f_hist observed-record mean annual forcing (scalar).
   #' @param reach_levels model's river_segment factor levels (character).
-  #' @param anchor_yr window length for the observed anchor (from anchor_t_norm()).
+  #' @param anchor_yr window length for the observed point (the track's
+  #'   OBS_WINDOW_YEARS_* constant, in scripts/eras.R).
   #' @param scenarios scenarios present on this track.
   #' @return tibble(river_segment<fct>, interval<fct>, cum_excess_k, interval_years,
   #'   scenario, period).
@@ -437,7 +422,10 @@ whisker_half_widths <- function(model, design, level, seed) {
   #' @param model the lmerMod model of record (cum_excess).
   #' @param design tibble from build_whisker_design().
   #' @param level PI width (0.80); seed integer seed for the draws.
-  #' @return tibble(river_segment<int>, scenario, period, whisker_half<ft/yr>).
+  #' @return tibble(river_segment<int>, scenario, period, interval_years,
+  #'   whisker_half<ft/yr>). interval_years is the divisor that annualized the
+  #'   half-width, carried because the blocks are no longer one length: a longer
+  #'   block yields a narrower bar for that reason alone.
   pi <- merTools::predictInterval(
     merMod = model, newdata = as.data.frame(design), which = "full",
     level = level, n.sims = 1000, stat = "median",
@@ -446,7 +434,7 @@ whisker_half_widths <- function(model, design, level, seed) {
   design %>%
     mutate(whisker_half = ((pi$upr - pi$lwr) / 2) / interval_years) %>%
     transmute(river_segment = as.integer(as.character(river_segment)),
-              scenario, period, whisker_half)
+              scenario, period, interval_years, whisker_half)
 }
 
 attach_whiskers <- function(traj, whiskers) {
@@ -458,7 +446,8 @@ attach_whiskers <- function(traj, whiskers) {
   #' @return traj + whisker_half, ymin, ymax.
   traj %>%
     mutate(.pkey = as.character(period)) %>%
-    left_join(mutate(whiskers, .pkey = as.character(period)) %>% select(-period),
+    left_join(mutate(whiskers, .pkey = as.character(period)) %>%
+                select(-period, -interval_years),
               by = c("river_segment", "scenario", ".pkey")) %>%
     select(-.pkey) %>%
     mutate(ymin = median - whisker_half, ymax = median + whisker_half)
@@ -609,24 +598,32 @@ ensemble_phrase <- function(member_period_forcing, track_label) {
 # 4. ORCHESTRATION  (validate + read inputs, apply the model, write outputs)
 # =============================================================================
 
-run_migration_projection <- function(annual_csv, normals, suffix, track_label,
+run_migration_projection <- function(annual_csv, normals, obs_window_years,
+                                     suffix, track_label,
                                      coef_csv = COEF_CSV, model_rds = MODEL_RDS) {
   #' Project migration for ONE track: read its forcing table, apply the frozen
-  #' model, write three CSVs and four figures.
+  #' model, write four CSVs and four figures.
   #' @param annual_csv per-year forcing table from 11b / 11c (one track).
-  #' @param normals tibble(period, y1, y2, t_norm) -- this track's reporting periods.
+  #' @param normals tibble(period, y1, y2, t_norm) -- this track's reporting
+  #'   blocks, from as_period_table() on one of the era tables in scripts/eras.R.
+  #' @param obs_window_years years to annualize the OBSERVED point over -- the
+  #'   track's OBS_WINDOW_YEARS_* constant. Stated, not derived from `normals`,
+  #'   because the statistical blocks are 30/30/34 and there is no single length
+  #'   to derive. Required, so a track cannot inherit the wrong one by default.
   #' @param suffix product/track tag for the output names.
   #' @param track_label "statistical" / "dynamical", for figure subtitles.
   #' @return list(member_rate, delta_band, abs_band, whiskers), invisibly.
   stopifnot(file.exists(annual_csv), file.exists(coef_csv), file.exists(model_rds),
-            all(c("period", "y1", "y2", "t_norm") %in% names(normals)))
+            all(c("period", "y1", "y2", "t_norm") %in% names(normals)),
+            length(obs_window_years) == 1L, is.finite(obs_window_years),
+            obs_window_years > 0)
   out <- out_paths(suffix)
 
   annual       <- read_csv(annual_csv, show_col_types = FALSE)
   coef         <- read_csv(coef_csv,   show_col_types = FALSE)
   reach_slopes <- select_reach_slopes(coef)
   f_hist       <- historical_anchor(annual)
-  anchor_yr    <- anchor_t_norm(normals)
+  anchor_yr    <- as.integer(obs_window_years)
   reach_floors <- select_reach_floors(coef, anchor_yr)
   stopifnot(is.finite(f_hist), nrow(reach_slopes) > 0, nrow(reach_floors) > 0)
 
@@ -654,6 +651,7 @@ run_migration_projection <- function(annual_csv, normals, suffix, track_label,
   whisk_design  <- build_whisker_design(forcing_cells, f_hist, reach_levels,
                                         anchor_yr, scenarios)
   whiskers      <- whisker_half_widths(model, whisk_design, PI_LEVEL, PI_SEED)
+  write_csv(whiskers, out$whiskers)
 
   delta_traj <- build_trajectory(delta_band, normals)
   abs_traj   <- build_trajectory(abs_band,   normals, hist_rate = reach_hist)
@@ -698,7 +696,7 @@ run_migration_projection <- function(annual_csv, normals, suffix, track_label,
       sep = "\n")),
     width = FIG_W, height = FIG_H, units = "in")
 
-  message(sprintf("Wrote 3 CSVs and 4 figures for the %s track (%s)",
+  message(sprintf("Wrote 4 CSVs and 4 figures for the %s track (%s)",
                   track_label, suffix))
 
   invisible(list(member_rate = abs_member, delta_band = delta_band,

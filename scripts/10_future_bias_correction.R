@@ -117,6 +117,7 @@
 # =============================================================================
 
 source("scripts/09_bias_correction.R")   # readers, Q2_CFS, MISSING_VALUE, dirs
+source("scripts/eras.R")                 # ERAS_STATISTICAL, ERAS_DYNAMICAL
 
 library(dplyr)
 library(readr)
@@ -136,44 +137,15 @@ SPLIT_YEAR <- 2005L   # last control year; everything after it is the projection
                       # fitted to a longer one. The 2005/2006 split is unchanged.
 APPLY_K    <- TRUE    # PresRat mean-change conservation (Pierce et al. 2015 s.3b)
 
-# K-factor eras. A table of calendar-year blocks; K is computed and applied
-# within each. One table per bias-correction track, because the two have
-# different projection spans. ERAS_STATISTICAL is the default argument to
-# correct_series() and run_bias_correction() as the 160-member case;
-# ERAS_DYNAMICAL is passed explicitly by the dynamical runner.
+# K-factor eras. Defined ONCE in scripts/eras.R and sourced above, because the
+# same blocks are now the reporting periods in 11 and 12 as well (Byron,
+# 2026-09-29: the correction eras are the master temporal logic). A second copy
+# here is how the three stages drifted apart in the first place.
 #
-# The statistical table follows Pierce et al. (2015), who segment the future
-# into 30-year periods. 2006-2099 is 94 years, so the blocks cannot all be 30:
-# the tail carries the remainder at 34 years rather than leaving a 4-year block
-# whose mean change would rest on very few days.
-ERAS_STATISTICAL <- tribble(
-  ~era,         ~y1,    ~y2,
-  "2006-2035",  2006L,  2035L,
-  "2036-2065",  2036L,  2065L,
-  "2066-2099",  2066L,  2099L
-)
-
-# The dynamical projection is 2011-01-01 to 2050-11-30 -- 14,579 days, no gaps
-# beyond the November truncation. Two 20-year blocks, NOT Pierce's 30: 30 would
-# split 40 years into 30 and 10, leaving the end of the record in a block a
-# third the length of the other. 20 is already this project's block length --
-# the warming-level windows under G1 are all 20 years -- so it keeps the
-# dynamical track internally consistent without introducing a new unit. No
-# attempt is made to align these bounds with ERAS_STATISTICAL: under G6 the two
-# tracks are separate analytical tracks, never pooled, and K never crosses
-# between them.
-#
-# Property, not a defect: the second era ends 2050-11-30, so it holds 20
-# Januaries and 19 Decembers where the first holds 20 of each. K is a ratio
-# against a control carrying the same truncation, so it largely cancels, but it
-# is asymmetric between the two eras. December is not the flood month here
-# (measured 2026-09-28: 7% of dynamical above-bankfull days, against Feb-Apr
-# carrying the bulk).
-ERAS_DYNAMICAL <- tribble(
-  ~era,         ~y1,    ~y2,
-  "2011-2030",  2011L,  2030L,
-  "2031-2050",  2031L,  2050L
-)
+# ERAS_STATISTICAL is the default argument to correct_series() and
+# run_bias_correction(), the 160-member case; ERAS_DYNAMICAL is passed
+# explicitly by the dynamical runner. Both tables, and the reasoning behind each
+# set of bounds, live in scripts/eras.R.
 
 BC_OUT_DIR <- "data/Umatilla_Future_Flows_BC"
 

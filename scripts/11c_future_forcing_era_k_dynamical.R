@@ -8,12 +8,13 @@
 # Purpose: the dynamical counterpart of 11b. Twelve members (3 GCMs x 4 hydrology
 #   configs, RCP8.5 only), corrected by 10c under ERAS_DYNAMICAL.
 #
-# Reporting periods differ from the statistical track by design (PERIODS_DYNAMICAL
-#   in 11): 2011-2030 and 2031-2050, the same two 20-year blocks this track uses
-#   for K. The record runs 2011-01-01 -> 2050-11-30, so the statistical table's
-#   30-year normals do not fit it -- 2070-2099 would be empty and 2040-2069 would
-#   hold 11 years. Under G6 this track owes the statistical one no comparability;
-#   the side-by-side of the two forward models is itself the finding.
+# Reporting periods differ from the statistical track by design (ERAS_DYNAMICAL
+#   in scripts/eras.R): 2011-2030 and 2031-2050, the same two 20-year blocks this
+#   track uses for K -- correction and reporting on one table. The record runs
+#   2011-01-01 -> 2050-11-30, so the statistical blocks do not fit it: 2066-2099
+#   would be empty and 2036-2065 would hold 15 years. This track owes the
+#   statistical one no comparability; the side-by-side of the two forward models
+#   is itself the finding.
 #
 # Two properties of this record, both expected:
 #   - WY2011 is Jan-Sep 2011 only (the record starts 2011-01-01), so it is dropped
@@ -57,7 +58,7 @@ OUT_SUMMARY <- "data/future_forcing_period_summary_bc-k-by-era-dynamical.csv"
 out <- run_future_forcing(
   manifest_path = MANIFEST,
   tag           = PRODUCT_TAG,
-  periods       = PERIODS_DYNAMICAL,
+  periods       = as_period_table(ERAS_DYNAMICAL),
   out_annual    = OUT_ANNUAL,
   out_summary   = OUT_SUMMARY
 )

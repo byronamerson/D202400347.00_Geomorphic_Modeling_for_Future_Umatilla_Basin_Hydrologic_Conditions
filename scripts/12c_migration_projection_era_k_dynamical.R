@@ -52,10 +52,11 @@ TRACK_LABEL <- "dynamical"
 # =============================================================================
 
 out <- run_migration_projection(
-  annual_csv  = ANNUAL_CSV,
-  normals     = NORMALS_DYNAMICAL,
-  suffix      = SUFFIX,
-  track_label = TRACK_LABEL
+  annual_csv       = ANNUAL_CSV,
+  normals          = as_period_table(ERAS_DYNAMICAL),
+  obs_window_years = OBS_WINDOW_YEARS_DYNAMICAL,
+  suffix           = SUFFIX,
+  track_label      = TRACK_LABEL
 )
 
 
@@ -63,9 +64,9 @@ out <- run_migration_projection(
 # 3. WHAT THE RUN PRODUCED  (describe; do not conclude)
 # =============================================================================
 
-cat(sprintf("\nF_hist = %s cfs-days/yr; t_norm = %d yr\n",
+cat(sprintf("\nF_hist = %s cfs-days/yr; Observed point annualized over %d yr\n",
             format(round(out$f_hist), big.mark = ","),
-            anchor_t_norm(NORMALS_DYNAMICAL)))
+            OBS_WINDOW_YEARS_DYNAMICAL))
 
 # Per-reach historical anchor rate (ft/yr) at THIS track's t_norm. Read against
 # 12b's table: the difference is the intercept annualized over 20 rather than 30.
@@ -78,4 +79,18 @@ out$reach_hist %>%
 out$delta_band %>%
   mutate(across(c(median, p10, p90), ~ round(.x, 2))) %>%
   arrange(river_segment, period) %>%
+  as.data.frame() %>% print(row.names = FALSE)
+
+# 80% model-error half-width (ft/yr), spread across reaches within each block.
+# interval_years is the divisor. These bars run wider than 12b's: the half-width
+# is dominated by the interval random effect and the residual, neither of which
+# shrinks with a shorter window, while the divisor does. Full table on disk.
+cat("\n80% model-error half-width (ft/yr), across reaches:\n")
+out$whiskers %>%
+  group_by(period, interval_years) %>%
+  summarise(reaches = n_distinct(river_segment),
+            min     = round(min(whisker_half), 2),
+            median  = round(median(whisker_half), 2),
+            max     = round(max(whisker_half), 2),
+            .groups = "drop") %>%
   as.data.frame() %>% print(row.names = FALSE)

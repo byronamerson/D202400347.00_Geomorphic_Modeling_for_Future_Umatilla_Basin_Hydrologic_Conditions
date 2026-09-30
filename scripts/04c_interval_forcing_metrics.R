@@ -22,7 +22,8 @@
 #          peak in rs30_interval_sandbox.R (the flood that did the work must fall
 #          within the interval, not before it).
 #
-# Forcing metrics per interval (threshold = Q2 ~5,542 cfs unless changed):
+# Forcing metrics per interval (threshold = metric_fraction x Q2; see CONFIGURATION.
+#   Model of record since 2026-09-07 is 0.75 x Q2 ~ 4,156 cfs, NOT Q2):
 #   - q_peak_daily_cfs           : max daily mean discharge in the window
 #   - threshold_cfs              : the exceedance threshold actually used
 #                                  (metric_fraction x Q2; = Q2 when fraction = 1.0)

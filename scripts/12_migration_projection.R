@@ -156,10 +156,12 @@ select_reach_slopes <- function(coef) {
 # anchor_t_norm() is GONE. It derived the observed point's divisor from the period
 # table and errored on a mixed-length table rather than picking one -- correct
 # while every block in use was the same length. The statistical eras are 30/30/34,
-# so there is no single length to derive and the divisor is now STATED, per track,
-# as OBS_WINDOW_YEARS_STATISTICAL / _DYNAMICAL in scripts/eras.R and passed to
-# run_migration_projection() as obs_window_years. The guard's job is done by the
-# argument being explicit; its reasoning moved to eras.R with the constants.
+# so there is no single length to derive and the divisor is now STATED BY THE
+# CALLER and passed to run_migration_projection() as obs_window_years. The era
+# runners state it as OBS_WINDOW_YEARS_STATISTICAL / _DYNAMICAL from
+# scripts/eras.R; the warming-level runner states 20 on both tracks because every
+# level window is 20 years (gwl_migration_projection.R header, decision 2). The
+# guard's job is done by the argument being explicit.
 
 select_reach_floors <- function(coef, t_norm) {
   #' Per-reach baseline annual rate (the absolute-rate floor): the shared
@@ -392,8 +394,9 @@ build_whisker_design <- function(forcing_cells, f_hist, reach_levels, anchor_yr,
   #' @param forcing_cells tibble(scenario, period, t_norm, f_annual_median).
   #' @param f_hist observed-record mean annual forcing (scalar).
   #' @param reach_levels model's river_segment factor levels (character).
-  #' @param anchor_yr window length for the observed point (the track's
-  #'   OBS_WINDOW_YEARS_* constant, in scripts/eras.R).
+  #' @param anchor_yr window length for the observed point, stated by the caller
+  #'   (era runners: the track's OBS_WINDOW_YEARS_* constant in scripts/eras.R;
+  #'   warming-level runner: 20, the level window length).
   #' @param scenarios scenarios present on this track.
   #' @return tibble(river_segment<fct>, interval<fct>, cum_excess_k, interval_years,
   #'   scenario, period).
@@ -607,7 +610,8 @@ run_migration_projection <- function(annual_csv, normals, obs_window_years,
   #' @param normals tibble(period, y1, y2, t_norm) -- this track's reporting
   #'   blocks, from as_period_table() on one of the era tables in scripts/eras.R.
   #' @param obs_window_years years to annualize the OBSERVED point over -- the
-  #'   track's OBS_WINDOW_YEARS_* constant. Stated, not derived from `normals`,
+  #'   era runners pass the track's OBS_WINDOW_YEARS_* constant, the
+  #'   warming-level runner passes 20. Stated, not derived from `normals`,
   #'   because the statistical blocks are 30/30/34 and there is no single length
   #'   to derive. Required, so a track cannot inherit the wrong one by default.
   #' @param suffix product/track tag for the output names.

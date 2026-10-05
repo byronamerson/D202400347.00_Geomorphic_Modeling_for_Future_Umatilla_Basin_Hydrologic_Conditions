@@ -84,9 +84,12 @@ ERAS_DYNAMICAL <- tribble(
 # therefore no single length to read. 34 is the arithmetic remainder of 94/30,
 # not a chosen block length, so 30 is the honest divisor. Byron, 2026-09-29.
 #
-# Consequence, already on record (SESSION_LOG_2026-09-29b): this divisor is
-# track-specific, so the same observed record plots at a different height on the
-# two tracks' absolute-rate figures (RS30: 9.07 ft/yr at 30, 9.66 at 20).
+# Consequence, already on record (SESSION_LOG_2026-09-29b): the constants below
+# are the ERA-axis divisors. The warming-level axis states its own divisor of 20
+# on both tracks (gwl_migration_projection.R, settled 2026-10-05), so the same
+# observed record plots at a different height on the era and warming-level
+# absolute-rate figures (RS30: 8.29 ft/yr at 30, 8.88 at 20, both at
+# F_hist = 3,465 -- the post-flood-free-fill anchor, SESSION_LOG_2026-09-29d).
 # Internally consistent within a figure; the two figures cannot be read against
 # each other by eye. The change-vs-historical view is unaffected -- the divisor
 # cancels in the difference.

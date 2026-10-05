@@ -19,8 +19,9 @@
 #
 # Inputs : data/gwl_windows.csv                              (gwl_windows.R)
 #          data/future_forcing_annual_bc-k-by-era.csv        (11b, statistical)
-#          data/future_forcing_annual_bc-k-by-era-dynamical.csv (11c, dynamical)
-# Output : data/gwl_forcing_by_level_<suffix>.csv, one per track
+# Output : data/gwl_forcing_by_level_bc-k-by-era.csv
+# Note   : the dynamical annual table (11c) was an input until 2026-10-05, when
+#          the dynamical track was retired from this axis -- see LEVELS_BY_TRACK.
 # Style  : Tidyverse & FP guidelines; docs/lingua.md.
 #
 # -----------------------------------------------------------------------------
@@ -31,15 +32,17 @@
 #    Five member-GCM x level combinations have windows reaching outside the
 #    corrected record: two statistical (CCSM4, CanESM2 at RCP8.5 1.5 degC,
 #    16/20) and three dynamical (CCSM4 1.5 degC 11/20; GFDL-ESM2M 9/20 and
-#    MIROC5 12/20 at 2 degC). Missing years are filled at the mean of the years
+#    MIROC5 12/20 at 2 degC). Only the two statistical ones are live now; the
+#    three dynamical ones are why that track was retired from this axis on
+#    2026-10-05. Missing years are filled at the mean of the years
 #    present IN THAT WINDOW, then totalled to the nominal 20. n_years carries
 #    the realized count so the fill is visible, never inferred.
 #
 #    Byron accepted the bias rather than correcting it. Direction, for the
 #    caption: the window straddles the crossing year, so a window truncated at
 #    the FRONT keeps the warm half and one truncated at the BACK keeps the cool
-#    half. On the dynamical track these sort by level -- 1.5 degC warm-biased,
-#    2 degC cool-biased -- which compresses the gap between them.
+#    half. Both live statistical truncations are at the front, so RCP8.5's
+#    1.5 degC pool is warm-biased.
 #
 # 2. THE FILL IS ARITHMETIC, NOT A REPAIR. Filling k missing years at the mean m
 #    of the n present gives n*m + (n_window - n)*m = n_window * m. The fill
@@ -71,9 +74,9 @@
 #
 # 5. THE OBSERVED ANCHOR IS NOT REBUILT HERE. 11 writes the observed record as
 #    period = "historical" in its own summary, identical on both tracks, and 12
-#    reads it from there. Whether the statistical Observed point keeps its
-#    30-year divisor or takes 20 on a warming-level figure is a step-3 question
-#    and is deliberately not answered in this file.
+#    reads it from there. The statistical Observed point takes a 20-year divisor
+#    on the warming-level axis (settled 2026-10-05, step 3); that choice is made
+#    in gwl_migration_projection.R and is deliberately not answered in this file.
 #
 # NOTHING RUNS ON SOURCE except section 5, which builds both tracks -- the same
 # shape as gwl_windows.R. Neither track reads member CSVs; both read the per-year
@@ -100,11 +103,20 @@ WINDOW_YEARS <- 20L
 # at 3 or 4 degC; CCSM4's 3 degC window (2049-2068) overlaps the record by two
 # water years, which the coverage rule would otherwise fill to a nominal 20 and
 # report as a level. THIS IS A HARD LIMIT, NOT A COVERAGE THRESHOLD -- it is not
-# a floor on n_years, and settling it did not reopen §5b. The dynamical track
-# reports 1.5 and 2 degC; that is the scope of the record.
+# a floor on n_years, and settling it did not reopen §5b.
+#
+# RETIRED 2026-10-05 (Byron): the dynamical track no longer appears on the
+# warming-level axis at all -- not in reporting, not as CSVs, not as figures.
+# A 40-year corrected record (WY2012-2050) is too short for the framing to be
+# worth running: three of five member-level windows are truncated at the leading
+# or trailing end, which is a no-start for an analysis that depends on the window
+# straddling the crossing year. The dynamical track is reported on the CALENDAR-
+# ERA axis only (scripts 10c / 11c / 12c), which is untouched and remains the
+# dynamical track's analysis of record. Its retired config is kept below rather
+# than deleted so the inputs are on the record.
 LEVELS_BY_TRACK <- list(
-  statistical = c(1.5, 2.0, 3.0, 4.0),
-  dynamical   = c(1.5, 2.0)
+  statistical = c(1.5, 2.0, 3.0, 4.0)
+  # dynamical = c(1.5, 2.0)   # retired 2026-10-05, see above
 )
 
 # One entry per forward-modeling track. The tracks are never pooled into one
@@ -112,8 +124,9 @@ LEVELS_BY_TRACK <- list(
 # shared row anywhere in this file.
 TRACKS <- tibble::tribble(
   ~track,         ~annual_csv,                                           ~out_csv,
-  "statistical",  "data/future_forcing_annual_bc-k-by-era.csv",           "data/gwl_forcing_by_level_bc-k-by-era.csv",
-  "dynamical",    "data/future_forcing_annual_bc-k-by-era-dynamical.csv", "data/gwl_forcing_by_level_bc-k-by-era-dynamical.csv"
+  "statistical",  "data/future_forcing_annual_bc-k-by-era.csv",           "data/gwl_forcing_by_level_bc-k-by-era.csv"
+  # retired 2026-10-05, see LEVELS_BY_TRACK above:
+  # "dynamical",  "data/future_forcing_annual_bc-k-by-era-dynamical.csv", "data/gwl_forcing_by_level_bc-k-by-era-dynamical.csv"
 )
 
 
@@ -281,9 +294,9 @@ purrr::imap(gwl_forcing, function(d, track) {
   bind_rows() %>%
   as.data.frame() %>% print(row.names = FALSE)
 
-cat("\n    The n a figure at each level must carry. Tracks are reported side by\n",
-    "   side and never pooled. The dynamical track cannot reach 3 or 4 degC --\n",
-    "   its record ends in 2050 -- and that is a scoping fact, not a gap.\n", sep = "")
+cat("\n    The n a figure at each level must carry. The statistical track is the\n",
+    "   only track on this axis; the dynamical track was retired from the\n",
+    "   warming-level framing on 2026-10-05 and is reported on the era axis.\n", sep = "")
 
 cat("\n=== 2. Partial windows ===\n")
 bind_rows(gwl_forcing, .id = "track") %>%
@@ -293,9 +306,8 @@ bind_rows(gwl_forcing, .id = "track") %>%
 
 cat("\n    Windows the corrected record does not fully cover. Missing years were\n",
     "   filled at the mean of the years present, so the total is on the nominal\n",
-    "   ", WINDOW_YEARS, "-year scale. Expected: CCSM4 and CanESM2 at RCP8.5 1.5 degC on the\n",
-    "   statistical track; CCSM4 at 1.5 degC and GFDL-ESM2M / MIROC5 at 2 degC on\n",
-    "   the dynamical track. Anything else here is unexplained -- stop and look.\n", sep = "")
+    "   ", WINDOW_YEARS, "-year scale. Expected: CCSM4 and CanESM2 at RCP8.5 1.5 degC.\n",
+    "   Anything else here is unexplained -- stop and look.\n", sep = "")
 
 cat("\n=== 3. Level means, pooled within track x scenario ===\n")
 bind_rows(gwl_forcing, .id = "track") %>%

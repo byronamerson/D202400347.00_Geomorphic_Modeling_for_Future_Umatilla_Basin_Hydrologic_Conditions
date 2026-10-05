@@ -57,15 +57,24 @@
 #    is one block length here. It is READ from the step-2 table rather than
 #    declared, so it cannot drift from the thing that produced it.
 #
-# 2. THE OBSERVED POINT'S DIVISOR IS AN ARGUMENT, STATED PER TRACK, and it is
-#    NOT the same question as (1). The Observed point belongs to no level; its
-#    divisor annualizes the model's per-interval intercept for the historical
-#    record. On the era axis it is OBS_WINDOW_YEARS_* from scripts/eras.R (30
-#    statistical, 20 dynamical). Whether the statistical Observed point should
-#    take 20 here -- matching the level windows instead of the era blocks -- is
-#    OPEN (SESSION_LOG_2026-09-29d §7). The runners below use the eras.R
-#    constants so this file makes no silent choice; it moves the Observed point
-#    only, and the delta view is immune because the divisor cancels.
+# 2. THE OBSERVED POINT'S DIVISOR IS 20 ON BOTH TRACKS, and it is NOT the same
+#    question as (1). The Observed point belongs to no level; its divisor
+#    annualizes the model's per-interval intercept for the historical record.
+#    SETTLED (Byron, 2026-10-05): on this axis every window is 20 years, which
+#    is the AR6 convention the windows are published under, so the historical
+#    anchor is annualized on the same basis as the levels it is plotted beside.
+#    Stated as a literal in GWL_TRACKS rather than taken from scripts/eras.R,
+#    because the eras.R constants answer the ERA-axis question and the
+#    statistical one is deliberately 30 there (the statistical eras run
+#    30/30/34, so there is no single block length to read and 30 is the honest
+#    divisor on that axis -- see the "The observed point" block in eras.R).
+#
+#    CONSEQUENCE, needs a caption or methods line: the same observed record now
+#    plots at a different height on the era and warming-level absolute-rate
+#    figures (RS30: 8.29 ft/yr at 30, 8.88 at 20, both at F_hist = 3,465). Each
+#    figure is internally consistent; the two cannot be read against each other
+#    by eye. The change-vs-historical view is immune either way -- the divisor
+#    cancels.
 #
 # 3. THE HISTORICAL ANCHOR COMES FROM 11's ANNUAL TABLE, not from step 2. F_hist
 #    is the observed record's mean annual cum_excess and is IDENTICAL on both
@@ -80,9 +89,9 @@
 #    code.
 #
 # 5. n IS CARRIED PER LEVEL in the subtitle, not once for the run. Membership
-#    varies by level -- RCP4.5 reaches 3 degC in 2 GCMs of 10, and the dynamical
-#    track reports 1.5 and 2 degC only -- so a single "160 members" phrase would
-#    describe no level correctly. level_n_phrase() counts from the data.
+#    varies by level -- RCP4.5 reaches 3 degC in only 2 GCMs of 10 -- so a single
+#    "160 members" phrase would describe no level correctly. level_n_phrase()
+#    counts from the data.
 #
 # Inputs : data/gwl_forcing_by_level_<suffix>.csv        (gwl_forcing_by_level.R)
 #          data/future_forcing_annual_bc-k-by-era*.csv   (11b / 11c; F_hist only)
@@ -103,10 +112,18 @@ source("scripts/12_migration_projection.R")   # helpers + constants; runs nothin
 # One entry per forward-modeling track. Tracks are never pooled into one
 # ensemble summary (G6, Byron 2026-09-28): separate inputs, separate outputs.
 # obs_window_years is stated per track -- see decision 2 in the header.
+#
+# RETIRED 2026-10-05 (Byron): the dynamical track is off the warming-level axis
+# entirely -- no CSVs, no figures, no report rows. Its 40-year corrected record
+# leaves three of five member-level windows truncated at the leading or trailing
+# end, which is a no-start for a framing that depends on the window straddling
+# the crossing year. The dynamical track is reported on the CALENDAR-ERA axis
+# only (10c / 11c / 12c), untouched. Row kept as a comment so the inputs stay on
+# the record.
 GWL_TRACKS <- tibble::tribble(
   ~track,        ~level_csv,                                          ~annual_csv,                                           ~suffix,                     ~obs_window_years,
-  "statistical", "data/gwl_forcing_by_level_bc-k-by-era.csv",           "data/future_forcing_annual_bc-k-by-era.csv",           "gwl-bc-k-by-era",           OBS_WINDOW_YEARS_STATISTICAL,
-  "dynamical",   "data/gwl_forcing_by_level_bc-k-by-era-dynamical.csv", "data/future_forcing_annual_bc-k-by-era-dynamical.csv", "gwl-bc-k-by-era-dynamical", OBS_WINDOW_YEARS_DYNAMICAL
+  "statistical", "data/gwl_forcing_by_level_bc-k-by-era.csv",           "data/future_forcing_annual_bc-k-by-era.csv",           "gwl-bc-k-by-era",           20L
+  # "dynamical", "data/gwl_forcing_by_level_bc-k-by-era-dynamical.csv", "data/future_forcing_annual_bc-k-by-era-dynamical.csv", "gwl-bc-k-by-era-dynamical", 20L
 )
 
 
@@ -152,9 +169,9 @@ level_block_table <- function(member_period_forcing) {
   #' In      : member_period_forcing, from as_member_period_forcing().
   #' Out     : tibble(period, t_norm), ordered coldest level first.
   #' Decision: DERIVED from the forcing, not declared. A level with no member on
-  #'   this track must not appear as an empty slot on its figures -- the
-  #'   dynamical track reports 1.5 and 2 degC, and that is the record's scope,
-  #'   not a gap to leave room for.
+  #'   this track must not appear as an empty slot on its figures. (This mattered
+  #'   most for the dynamical track, retired from this axis 2026-10-05; it still
+  #'   guards the statistical track, where RCP4.5 reaches 3 degC in only 2 GCMs.)
   #' Decision: no y1/y2. Those exist for bin_forcing_to_normals(), which this
   #'   path never calls; everything downstream uses `period` for ordering and
   #'   `t_norm` for the interval scale. Stated because the era table has them.
@@ -322,10 +339,11 @@ purrr::imap(gwl_proj, function(r, track) {
                  block_t_norm   = paste(unique(r$blocks$t_norm), collapse = ", "))
 }) %>% bind_rows() %>% as.data.frame() %>% print(row.names = FALSE)
 
-cat("\n    F_hist is the observed record's mean annual cum_excess and is the same\n",
-    "   on both tracks. obs_divisor_yr annualizes the Observed point only; it\n",
-    "   cancels in the change-vs-historical view. Whether the statistical track\n",
-    "   should use 20 here rather than 30 is OPEN.\n", sep = "")
+cat("\n    F_hist is the observed record's mean annual cum_excess. obs_divisor_yr\n",
+    "   annualizes the Observed point only; it cancels in the change-vs-\n",
+    "   historical view. It is 20, matching the level windows (settled\n",
+    "   2026-10-05); the era-axis figures use 30 on the statistical track, so\n",
+    "   Observed sits higher there.\n", sep = "")
 
 cat("\n=== 2. Change vs historical at RS30 (ft/yr), median [p10, p90] ===\n")
 purrr::imap(gwl_proj, function(r, track) {

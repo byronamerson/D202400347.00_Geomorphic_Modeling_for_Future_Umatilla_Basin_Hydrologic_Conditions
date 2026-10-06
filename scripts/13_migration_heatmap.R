@@ -1,44 +1,92 @@
 # =============================================================================
 # 13_migration_heatmap.R
 # Umatilla River Discharge-Channel Migration Analysis
-# Phase 12 companion: SPATIAL (reach x period) heat map of projected migration
+# Phase 12 companion: SPATIAL (reach x period) heat maps of projected migration
 #          rate -- the "where does migration accelerate" view.
 # =============================================================================
 #
-# Draws entirely from script 12's summary outputs. Each cell is one ensemble-
-# median rate; y = reach (upstream -> downstream), x = climate normal (historical
-# baseline + three 30-yr normals), fill = rate, one panel per RCP.
+# Draws entirely from the projection summary outputs. Each cell is one ensemble-
+# median rate; y = reach (upstream -> downstream), x = the period axis, fill =
+# rate, one panel per RCP.
 #
-# Two views: absolute annual rate (where the channel moves fastest) and Δ vs
-# historical (where climate change adds the most). The historical column is not
-# in the summary CSVs, but it is recoverable: absolute = historical + Δ per
-# member and historical is a per-reach constant, so (absolute median − Δ median)
-# is that reach's historical rate -- no extra input from 12 needed.
+# TWO AXES, STATISTICAL TRACK ONLY. The dynamical track is reported on the
+# calendar-era axis (12c) and was retired from the warming-level axis on
+# 2026-10-05; neither of its summaries is mapped here.
 #
-# Inputs : data/migration_rate_summary.csv    (absolute band, from 12)
-#          data/migration_dArate_summary.csv  (Δ band, from 12)
-# Outputs: plots/migration_heatmap_rate.png   (absolute)
-#          plots/migration_heatmap_dArate.png (Δ vs historical)
+#   era : calendar blocks 2006-2035 / 2036-2065 / 2066-2099   (from 12b)
+#   gwl : warming levels 1.5 / 2 / 3 / 4 degC                 (from
+#         gwl_migration_projection.R)
+#
+# Two views per axis: absolute annual rate (where the channel moves fastest) and
+# delta vs historical (where climate change adds the most). The historical column
+# is not in the summary CSVs, but it is recoverable: absolute = historical +
+# delta per member, and historical is a per-reach constant, so (absolute median
+# - delta median) is that reach's historical rate. No extra input is needed.
+#
+# THE HISTORICAL COLUMN IS NOT THE SAME NUMBER ON THE TWO AXES. The era figure
+# annualizes the Observed point over 30 years (eras.R,
+# OBS_WINDOW_YEARS_STATISTICAL); the warming-level figure over 20 years
+# (GWL_TRACKS, settled 2026-10-05, because every published warming-level window
+# is 20 years). Each figure is internally consistent; the two historical columns
+# cannot be read against each other. The delta views are unaffected -- the
+# divisor cancels in the change view.
+#
+# THE WARMING-LEVEL GRID IS RAGGED BY CONSTRUCTION, the era grid is not. RCP4.5
+# never reaches 4 degC, so that tile is empty, and member counts fall away at the
+# high levels (80 / 64 / 16 on RCP4.5; 80 / 80 / 80 / 56 on RCP8.5) against a
+# uniform 80 everywhere on the era axis. Cells are drawn as-is: nothing is
+# dropped and no member count is shown. This is deliberate for a first look.
+#
+# Inputs : data/migration_rate_summary_<suffix>.csv    (absolute band)
+#          data/migration_dArate_summary_<suffix>.csv  (delta band)
+# Outputs: plots/migration_heatmap_rate_<suffix>.png
+#          plots/migration_heatmap_dArate_<suffix>.png
 # Style  : Tidyverse & FP guidelines (docs/lingua.md, docs/r-principles.md).
 # =============================================================================
 
 library(dplyr)
 library(readr)
 library(ggplot2)
+library(purrr)
 
 
 # =============================================================================
 # 1. CONFIGURATION
 # =============================================================================
 
-RATE_CSV  <- "data/migration_rate_summary.csv"
-DELTA_CSV <- "data/migration_dArate_summary.csv"
-OUT_RATE  <- "plots/migration_heatmap_rate.png"
-OUT_DELTA <- "plots/migration_heatmap_dArate.png"
-OUT_RATE_ALT <- "plots/migration_heatmap_rate_rocket.png"   # palette comparison
+# One entry per period axis. Period levels are stated, not derived from the
+# incoming table: the axis order is an editorial choice about the figure, and a
+# figure should not silently re-order itself because a run produced a different
+# set of cells.
+AXES <- list(
+  list(
+    suffix        = "bc-k-by-era",
+    axis_name     = "climate era",
+    period_levels = c("2006-2035", "2036-2065", "2066-2099"),
+    obs_window_yr = 30L
+  ),
+  list(
+    suffix        = "gwl-bc-k-by-era",
+    axis_name     = "global warming level",
+    period_levels = c("1.5 degC", "2 degC", "3 degC", "4 degC"),
+    obs_window_yr = 20L
+  )
+)
 
-# Climate normals, ordered; "historical" is prepended as the baseline column.
-NORMAL_PERIODS <- c("2010-2039", "2040-2069", "2070-2099")
+# Figure canvas, in inches. Sized for a tech memo on letter landscape with 1 in
+# margins: a 9 x 6.5 in text block, leaving ~0.5 in under the figure for a
+# caption. Rendered at final size on purpose -- letting the word processor scale
+# a larger render down also scales the type below its stated point size. Shared
+# by both axes, so the two figures are interchangeable on the page; the cost is
+# that the warming-level figure fits five columns in the same width the era
+# figure uses for four, so its tiles are narrower.
+FIG_WIDTH_IN  <- 9
+FIG_HEIGHT_IN <- 6
+
+rate_csv_path  <- function(suffix) sprintf("data/migration_rate_summary_%s.csv", suffix)
+delta_csv_path <- function(suffix) sprintf("data/migration_dArate_summary_%s.csv", suffix)
+out_rate_path  <- function(suffix) sprintf("plots/migration_heatmap_rate_%s.png", suffix)
+out_delta_path <- function(suffix) sprintf("plots/migration_heatmap_dArate_%s.png", suffix)
 
 
 # =============================================================================
@@ -46,12 +94,12 @@ NORMAL_PERIODS <- c("2010-2039", "2040-2069", "2070-2099")
 # =============================================================================
 
 reach_historical_rate <- function(abs_band, delta_band) {
-  #' Recover each reach's historical absolute rate as (absolute median − Δ median).
-  #' Absolute = historical + Δ per member and historical is a per-reach constant,
+  #' Recover each reach's historical absolute rate as (absolute median - delta median).
+  #' Absolute = historical + delta per member and historical is a per-reach constant,
   #' so the difference of medians equals that constant, identical across every
   #' scenario x period cell.
-  #' @param abs_band,delta_band summary bands from 12 (river_segment, scenario,
-  #'   period, median, ...).
+  #' @param abs_band,delta_band summary bands from the projection runner
+  #'   (river_segment, scenario, period, median, ...).
   #' @return tibble(river_segment, hist_rate_ft_yr, spread) -- spread should be ~0;
   #'   it is a guard that the recovery held.
   abs_band %>%
@@ -68,9 +116,12 @@ build_heatmap_table <- function(band, hist_value, reach_levels, period_levels) {
   #' historical baseline column and ordering the reach/period axes for display.
   #' @param band summary band (river_segment, scenario, period, median).
   #' @param hist_value tibble(river_segment, value) for the historical column
-  #'   (0 for the Δ view; the reach historical rate for the absolute view).
+  #'   (0 for the delta view; the reach historical rate for the absolute view).
   #' @param reach_levels,period_levels ordered factor levels for the axes.
   #' @return tibble(river_segment, scenario, reach <fct>, period <fct>, value).
+  #' Decision: period is levelled against the stated axis, so a level present in
+  #' the config but absent from `band` (RCP4.5 at 4 degC) draws as an empty tile
+  #' rather than vanishing from the axis.
   hist_rows <- band %>%
     distinct(river_segment, scenario) %>%
     left_join(hist_value, by = "river_segment") %>%
@@ -80,7 +131,7 @@ build_heatmap_table <- function(band, hist_value, reach_levels, period_levels) {
     transmute(river_segment, scenario, period, value = median) %>%
     bind_rows(hist_rows) %>%
     mutate(reach  = factor(paste0("RS", river_segment), levels = reach_levels),
-           period = factor(period, levels = period_levels))
+           period = factor(period, levels = c("historical", period_levels)))
 }
 
 plot_heatmap <- function(cells, fill_scale, dark_high, plot_title, plot_subtitle) {
@@ -93,7 +144,8 @@ plot_heatmap <- function(cells, fill_scale, dark_high, plot_title, plot_subtitle
   #' @return a ggplot object (caller handles ggsave -- I/O at the boundary).
   #' Decision: label text flips dark/light by cell brightness so numbers stay
   #' legible across the ramp; both RCP panels share one fill scale so they are
-  #' directly comparable.
+  #' directly comparable. drop = FALSE on the x scale keeps a level with no data
+  #' visible as a gap.
   rng     <- range(cells$value, na.rm = TRUE)
   hi_text <- if (dark_high) "grey95" else "grey10"   # text on high-value cells
   lo_text <- if (dark_high) "grey10" else "grey95"   # text on low-value cells
@@ -102,8 +154,9 @@ plot_heatmap <- function(cells, fill_scale, dark_high, plot_title, plot_subtitle
 
   ggplot(cells, aes(period, reach, fill = value)) +
     geom_tile(color = "white", linewidth = 0.5) +
-    geom_text(aes(label = round(value, 1), color = label_col), size = 3) +
+    geom_text(aes(label = round(value, 1), color = label_col), size = 3.2) +
     facet_wrap(~ scenario) +
+    scale_x_discrete(drop = FALSE) +
     fill_scale +
     scale_color_identity() +
     labs(x = NULL, y = NULL, title = plot_title, subtitle = plot_subtitle) +
@@ -113,59 +166,69 @@ plot_heatmap <- function(cells, fill_scale, dark_high, plot_title, plot_subtitle
           legend.position = "right")
 }
 
-
-# =============================================================================
-# 3. ORCHESTRATION  (read 12's summaries, assemble grids, write heat maps)
-# =============================================================================
-
-stopifnot(file.exists(RATE_CSV), file.exists(DELTA_CSV))
-abs_band   <- read_csv(RATE_CSV,  show_col_types = FALSE)
-delta_band <- read_csv(DELTA_CSV, show_col_types = FALSE)
-
-# Axis ordering: RS28 (upstream) at top -> RS37 (downstream) at bottom. Flip the
-# rev() if the station numbering runs the other way.
-reaches       <- sort(unique(abs_band$river_segment))
-reach_levels  <- paste0("RS", rev(reaches))
-period_levels <- c("historical", NORMAL_PERIODS)
-
-reach_hist <- reach_historical_rate(abs_band, delta_band)
-stopifnot(all(reach_hist$spread < 1e-6))   # historical rate must be constant per reach
-
-abs_cells <- build_heatmap_table(
-  abs_band,
-  hist_value    = transmute(reach_hist, river_segment, value = hist_rate_ft_yr),
-  reach_levels  = reach_levels,
-  period_levels = period_levels)
-
-delta_cells <- build_heatmap_table(
-  delta_band,
-  hist_value    = distinct(delta_band, river_segment) %>% mutate(value = 0),
-  reach_levels  = reach_levels,
-  period_levels = period_levels)
-
-# Colour ramps (both colour-blind safe, warm = more change, high end dark).
-# Default: ColorBrewer YlOrRd -- canonical risk/intensity ramp, no extra package.
-# Comparison: viridis rocket, reversed so the high end is dark -- perceptually uniform.
+# Colour ramp: ColorBrewer YlOrRd -- colour-blind safe, canonical risk/intensity
+# ramp, high end dark, no extra package.
 fill_ylorrd <- function(lab) scale_fill_distiller(palette = "YlOrRd", direction = 1, name = lab)
-fill_rocket <- function(lab) scale_fill_viridis_c(option = "rocket", direction = -1, name = lab)
 
-ggsave(OUT_RATE, plot_heatmap(
-  abs_cells, fill_ylorrd("ft/yr"), dark_high = TRUE,
-  plot_title    = "Projected channel migration rate by reach and climate normal",
-  plot_subtitle = "Ensemble median absolute rate (ft/yr). Rows: RS28 (upstream) -> RS37 (downstream)."),
-  width = 13, height = 6.5, units = "in")
 
-ggsave(OUT_DELTA, plot_heatmap(
-  delta_cells, fill_ylorrd("Δ ft/yr"), dark_high = TRUE,
-  plot_title    = "Projected change in channel migration rate by reach and climate normal",
-  plot_subtitle = "Ensemble median Δ vs historical (ft/yr). Rows: RS28 (upstream) -> RS37 (downstream)."),
-  width = 13, height = 6.5, units = "in")
+# =============================================================================
+# 3. ORCHESTRATION  (read one axis' summaries, assemble grids, write heat maps)
+# =============================================================================
 
-# Same absolute map in the rocket ramp, for a side-by-side palette comparison.
-ggsave(OUT_RATE_ALT, plot_heatmap(
-  abs_cells, fill_rocket("ft/yr"), dark_high = TRUE,
-  plot_title    = "Projected channel migration rate",
-  plot_subtitle = "Same data as migration_heatmap_rate.png; viridis rocket ramp."),
-  width = 13, height = 6.5, units = "in")
+render_axis_heatmaps <- function(axis) {
+  #' Draw and write both heat maps for one period axis.
+  #' @param axis one element of AXES: suffix, axis_name, period_levels,
+  #'   obs_window_yr, plot_width_in.
+  #' @return invisibly, the two output paths written.
+  #' This is the I/O boundary -- every helper above works on in-memory tables.
+  rate_csv  <- rate_csv_path(axis$suffix)
+  delta_csv <- delta_csv_path(axis$suffix)
+  stopifnot(file.exists(rate_csv), file.exists(delta_csv))
 
-cat("\nWrote ", OUT_RATE, ", ", OUT_DELTA, ", and ", OUT_RATE_ALT, "\n", sep = "")
+  abs_band   <- read_csv(rate_csv,  show_col_types = FALSE)
+  delta_band <- read_csv(delta_csv, show_col_types = FALSE)
+
+  # Axis ordering: RS28 (upstream) at top -> RS37 (downstream) at bottom.
+  reach_levels <- paste0("RS", rev(sort(unique(abs_band$river_segment))))
+
+  reach_hist <- reach_historical_rate(abs_band, delta_band)
+  stopifnot(all(reach_hist$spread < 1e-6))   # historical rate must be constant per reach
+
+  abs_cells <- build_heatmap_table(
+    abs_band,
+    hist_value    = transmute(reach_hist, river_segment, value = hist_rate_ft_yr),
+    reach_levels  = reach_levels,
+    period_levels = axis$period_levels)
+
+  delta_cells <- build_heatmap_table(
+    delta_band,
+    hist_value    = distinct(delta_band, river_segment) %>% mutate(value = 0),
+    reach_levels  = reach_levels,
+    period_levels = axis$period_levels)
+
+  out_rate  <- out_rate_path(axis$suffix)
+  out_delta <- out_delta_path(axis$suffix)
+
+  ggsave(out_rate, plot_heatmap(
+    abs_cells, fill_ylorrd("ft/yr"), dark_high = TRUE,
+    plot_title    = sprintf("Projected channel migration rate by reach and %s",
+                            axis$axis_name),
+    plot_subtitle = sprintf(paste("Statistical track; ensemble median absolute rate (ft/yr).",
+                                  "Historical column annualized over %d yr.",
+                                  "Rows: RS28 (upstream) -> RS37 (downstream)."),
+                            axis$obs_window_yr)),
+    width = FIG_WIDTH_IN, height = FIG_HEIGHT_IN, units = "in")
+
+  ggsave(out_delta, plot_heatmap(
+    delta_cells, fill_ylorrd("delta ft/yr"), dark_high = TRUE,
+    plot_title    = sprintf("Projected change in channel migration rate by reach and %s",
+                            axis$axis_name),
+    plot_subtitle = paste("Statistical track; ensemble median change vs historical (ft/yr).",
+                          "Rows: RS28 (upstream) -> RS37 (downstream).")),
+    width = FIG_WIDTH_IN, height = FIG_HEIGHT_IN, units = "in")
+
+  cat(sprintf("Wrote %s and %s\n", out_rate, out_delta))
+  invisible(c(out_rate, out_delta))
+}
+
+walk(AXES, render_axis_heatmaps)

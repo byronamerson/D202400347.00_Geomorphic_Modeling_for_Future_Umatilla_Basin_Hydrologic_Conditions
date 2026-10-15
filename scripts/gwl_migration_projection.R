@@ -142,6 +142,23 @@ level_label <- function(warming_level) {
   paste0(format(warming_level, trim = TRUE, drop0trailing = TRUE), " degC")
 }
 
+tex_level_labels <- function(slot) {
+  #' Purpose : render the x-axis slot labels with a typeset degree symbol.
+  #' In      : slot, the character slot labels as plotted ("Observed",
+  #'   "historical", "1.5 degC", "2 degC", ...).
+  #' Out     : a list of plotmath expressions, one per slot, for
+  #'   scale_x_discrete(labels = ).
+  #' Decision: the STORED label stays "1.5 degC" -- it is the join key between
+  #'   the forcing table, the whisker table and the slot order (see
+  #'   level_label), so it must remain plain ASCII. Only the display is
+  #'   typeset, and only here, at the plot boundary. Slots that are not
+  #'   warming levels pass through unchanged.
+  tex <- ifelse(grepl(" degC$", slot),
+                paste0("$", sub(" degC$", "", slot), "^{\\circ}$C"),
+                slot)
+  latex2exp::TeX(tex)
+}
+
 as_member_period_forcing <- function(level_forcing) {
   #' Purpose : map step 2's level summary onto the object 12's chain consumes.
   #' In      : level_forcing, a gwl_forcing_by_level.R table.
@@ -272,7 +289,8 @@ run_gwl_projection <- function(level_csv, annual_csv, obs_window_years,
     delta_traj,
     y_lab         = "Change in migration rate vs historical (ft/yr)",
     plot_title    = "Projected change in channel migration rate by warming level",
-    plot_subtitle = sprintf("Median + 10-90%% ensemble band.  %s.  Reaches RS28-37.", npl)),
+    plot_subtitle = sprintf("Median + 10-90%% ensemble band.  %s.  Reaches RS28-37.", npl),
+    x_labels      = tex_level_labels),
     width = FIG_W, height = FIG_H, units = "in")
 
   ggsave(out$plot_abs, plot_rate_trajectory(
@@ -284,7 +302,8 @@ run_gwl_projection <- function(level_csv, annual_csv, obs_window_years,
       "(fitted-coefficient, reach, unmeasured-period, and mapping error combined).  Band = 10-90% spread across the climate futures (which-future uncertainty).",
       sprintf("Observed = modeled rate at the historical forcing, annualized over %d yr.  %s.  Reaches RS28-37.",
               anchor_yr, npl),
-      sep = "\n")),
+      sep = "\n"),
+    x_labels      = tex_level_labels),
     width = FIG_W, height = FIG_H, units = "in")
 
   ggsave(out$plot_violin, plot_ensemble_violin(

@@ -87,10 +87,18 @@ SCENARIO_COLORS <- c(RCP45 = "#01665E", RCP85 = "#8C510A")
 SCENARIO_LABELS <- c(RCP45 = "RCP4.5", RCP85 = "RCP8.5")
 OBSERVED_LABEL  <- "Observed"     # discrete x-slot label for the historical anchor
 
-# Ten-reach facet figures: 10 x 7.5 in, a standard 4:3 slide -- explicitly NOT the
-# 13.3 widescreen (plotting_conventions.md, settled 2026-09-08).
-FIG_W <- 10
-FIG_H <- 7.5
+# Ten-reach facet figures: 13 x 7 in, 16:9 widescreen for the slide deck.
+# SUPERSEDES the 10 x 7.5 4:3 default (plotting_conventions.md, settled
+# 2026-09-08); changed by Byron 2026-10-07 because these figures are now
+# presented from PowerPoint. The memo figures inherit the change -- they come
+# from the same two constants.
+FIG_W <- 13
+FIG_H <- 7
+
+# Base font size for the facet figures, in points. Every text element in the
+# plot helpers scales from this, so readability at projection distance is one
+# knob rather than a dozen.
+BASE_SIZE <- 14
 
 # --- Reporting periods ---------------------------------------------------------
 # NO TABLE IS DECLARED HERE. This step still owns its own binning -- it re-bins
@@ -298,13 +306,19 @@ build_trajectory <- function(band, normals, hist_rate = NULL) {
     mutate(period = factor(period, levels = period_levels))
 }
 
-plot_trajectory <- function(traj, y_lab, plot_title, plot_subtitle, y_by = 10) {
+plot_trajectory <- function(traj, y_lab, plot_title, plot_subtitle, y_by = 10,
+                            base_size = BASE_SIZE, x_labels = waiver()) {
   #' Migration-rate trajectory by reporting period, one panel per reach, RCP as
   #' color, 10-90% ensemble band as ribbon. (Delta view; the absolute view uses
   #' plot_rate_trajectory() below.)
   #' @param traj tibble from build_trajectory().
   #' @param y_lab,plot_title,plot_subtitle labels (differ for delta vs absolute view).
   #' @param y_by tick interval (ft/yr) for the shared y-axis.
+  #' @param base_size base font size in points; all text scales from it.
+  #' @param x_labels labeller for the discrete x-axis, passed to
+  #'   scale_x_discrete(). Default waiver() prints the period labels as stored.
+  #'   The warming-level track passes a function returning plotmath expressions
+  #'   so "1.5 degC" renders as a degree symbol.
   #' @return a ggplot object (caller handles ggsave -- I/O at the boundary).
   #' Decision: SHARED fixed y-axis (not free_y) so panel heights are comparable
   #' reach-to-reach -- the whole point is to read relative range. Limits are taken
@@ -321,11 +335,12 @@ plot_trajectory <- function(traj, y_lab, plot_title, plot_subtitle, y_by = 10) {
                labeller = as_labeller(\(x) paste0("RS", x))) +     # strips read "RS30"
     scale_color_manual(values = SCENARIO_COLORS, labels = SCENARIO_LABELS,
                        aesthetics = c("color", "fill")) +
+    scale_x_discrete(labels = x_labels) +
     scale_y_continuous(breaks = seq(y_bot, y_top, by = y_by)) +
     coord_cartesian(ylim = c(y_bot, y_top)) +                      # clip-safe
     labs(x = NULL, y = y_lab, color = NULL, fill = NULL,
          title = plot_title, subtitle = plot_subtitle) +
-    theme_minimal(base_size = 10) +
+    theme_minimal(base_size = base_size) +
     theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "top")
 }
 
@@ -537,7 +552,8 @@ plot_raincloud <- function(member_rate, whiskers, normals, y_lab, plot_title,
 }
 
 plot_rate_trajectory <- function(traj, normals, y_lab, plot_title, plot_subtitle,
-                                 y_by = 10) {
+                                 y_by = 10,
+                                 base_size = BASE_SIZE, x_labels = waiver()) {
   #' Absolute migration-rate trajectory as a DISCRETE series of period solutions
   #' (Byron 2026-09-08): a categorical x of labeled slots (Observed + the periods),
   #' each point centered in its slot, slots separated by light vertical dividers,
@@ -548,6 +564,9 @@ plot_rate_trajectory <- function(traj, normals, y_lab, plot_title, plot_subtitle
   #' @param normals tibble(period, ...) supplying future slot order.
   #' @param y_lab,plot_title,plot_subtitle labels.
   #' @param y_by tick interval (ft/yr) for the shared y-axis.
+  #' @param base_size base font size in points; all text scales from it.
+  #' @param x_labels labeller for the discrete x-axis, passed to
+  #'   scale_x_discrete(). Default waiver() prints the slot labels as stored.
   #' @return a ggplot object (caller handles ggsave -- I/O at the boundary).
   slot_levels <- c(OBSERVED_LABEL, normals$period)
   d <- traj %>%
@@ -569,15 +588,19 @@ plot_rate_trajectory <- function(traj, normals, y_lab, plot_title, plot_subtitle
                labeller = as_labeller(\(x) paste0("RS", x))) +
     scale_color_manual(values = SCENARIO_COLORS, labels = SCENARIO_LABELS,
                        aesthetics = c("color", "fill")) +
+    scale_x_discrete(labels = x_labels) +
     scale_y_continuous(breaks = seq(y_bot, y_top, by = y_by)) +
     coord_cartesian(ylim = c(y_bot, y_top)) +
     labs(x = NULL, y = y_lab, color = NULL, fill = NULL,
          title = plot_title, subtitle = plot_subtitle) +
-    theme_minimal(base_size = 10) +
+    theme_minimal(base_size = base_size) +
     theme(axis.text.x = element_text(angle = 30, hjust = 1),
           legend.position = "top", panel.grid.major.x = element_blank(),
-          plot.title = element_text(size = 12),
-          plot.subtitle = element_text(size = 8, lineheight = 1.15))
+          # Title and subtitle are set relative to base_size so one knob moves
+          # the whole figure. The subtitle is three long lines of caveat and
+          # stays well below body text so it does not crowd the panels.
+          plot.title = element_text(size = rel(1.15)),
+          plot.subtitle = element_text(size = rel(0.65), lineheight = 1.15))
 }
 
 

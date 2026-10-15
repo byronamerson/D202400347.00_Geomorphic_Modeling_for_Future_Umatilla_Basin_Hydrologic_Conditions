@@ -40,3 +40,9 @@ docs/*.html
 # Reference material and staging, not part of the analysis chain
 bmorph/
 Claude outputs/
+
+# Generated / packaged / presentation artifacts
+docs/byrons_llm_context_docs.zip
+scripts_io_scan.json
+*.pptx
+docs/byrons_llm_context_docs/

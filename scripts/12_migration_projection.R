@@ -700,7 +700,8 @@ run_migration_projection <- function(annual_csv, normals, obs_window_years,
     plot_subtitle = paste(
       "Points = modeled median migration rate.  Bars = the model's 80% prediction interval: the 8-in-10 range for an actual measured rate at that forcing",
       "(fitted-coefficient, reach, unmeasured-period, and mapping error combined).  Band = 10-90% spread across the climate futures (which-future uncertainty).",
-      sprintf("Observed = modeled rate at the historical forcing.  %s.  Reaches RS28-37.", ens),
+      sprintf("Observed = modeled rate at the historical forcing, annualized over %d yr.  %s.  Reaches RS28-37.",
+              anchor_yr, ens),
       sep = "\n")),
     width = FIG_W, height = FIG_H, units = "in")
 
